@@ -8,11 +8,11 @@ on:
       - '.github/workflows/api_deploy.yml'
   workflow_dispatch:
 
-# ----- Set your defaults here (or use repo Variables and replace the values) -----
+# ---- EDIT these defaults to your liking. Make sure ACR_NAME is globally unique (letters/numbers only). ----
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcswaacr
+  ACR_NAME: lcacr123456          # <--- change to a UNIQUE name (e.g., lcacr<yourrandomdigits>)
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
@@ -27,77 +27,45 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}  # sp json from `az ad sp create-for-rbac --sdk-auth`
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Set subscription (from AZURE_CREDENTIALS)
         run: |
           SUB_ID=$(jq -r '.subscriptionId' <<< '${{ secrets.AZURE_CREDENTIALS }}')
           az account set --subscription "$SUB_ID"
-          echo "Using subscription: $SUB_ID"
+          az account show -o table
 
       - name: Check inputs
         run: |
-          : "${AZURE_RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP}"
-          : "${AZURE_LOCATION:?Set AZURE_LOCATION}"
-          echo "RG=$AZURE_RESOURCE_GROUP LOC=$AZURE_LOCATION"
+          : "${AZURE_RESOURCE_GROUP:?Set AZURE_RESOURCE_GROUP in env}"
+          : "${AZURE_LOCATION:?Set AZURE_LOCATION in env}"
+          : "${ACR_NAME:?Set ACR_NAME in env (must be globally unique)}"
+          echo "RG=$AZURE_RESOURCE_GROUP LOC=$AZURE_LOCATION ACR=$ACR_NAME"
 
-      - name: Create RG
-        run: az group create -n "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION"
-
-      - name: Ensure ACR
-        run: az acr create -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --sku Basic --only-show-errors || true
+      # ---------- Registry ----------
+      - name: Ensure ACR exists
+        run: |
+          if ! az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" >/dev/null 2>&1; then
+            az acr create -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" -l "$AZURE_LOCATION" --sku Basic
+          fi
+          az acr wait -n "$ACR_NAME" --created
+          az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" -o table
 
       - name: ACR login (AAD)
         run: az acr login -n "$ACR_NAME"
 
-      - name: Build & Push image
+      - name: Build & push image
         uses: docker/build-push-action@v5
         with:
           context: ./api
           push: true
           tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
+      # ---------- Container Apps ----------
       - name: Setup Container Apps
         run: |
           az extension add --name containerapp --upgrade
           az provider register --namespace Microsoft.App --wait
           az containerapp env create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" -l "$AZURE_LOCATION" || true
 
-      - name: Create/Update Container App
-        shell: bash
-        env:
-          SWA_URL: ${{ secrets.SWA_URL }}          # optional: lock CORS to your SWA domain
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          ALLOWED="$SWA_URL"; [ -z "$ALLOWED" ] && ALLOWED="*"
-
-          # create or update
-          if az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1; then
-            az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:latest" \
-              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED" \
-              --secrets openai-key="$OPENAI_API_KEY" \
-              --replace-secrets
-          else
-            az containerapp create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --environment "$CONTAINERAPPS_ENV" \
-              --ingress external --target-port 8000 \
-              --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:latest" \
-              --registry-server "$ACR_NAME.azurecr.io" \
-              --assign-identity \
-              --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED" \
-              --secrets openai-key="$OPENAI_API_KEY" \
-              --secret-env-vars OPENAI_API_KEY=secretref:openai-key
-          fi
-
-          # ensure the app's identity can pull from ACR (AcrPull)
-          ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
-          APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
-          az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
-
-      - name: Output API URL
-        id: out
-        run: |
-          FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query properties.configuration.ingress.fqdn -o tsv)
-          echo "API_URL=https://$FQDN"
-          echo "api_url=https://$FQDN" >> "$GITHUB_OUTPUT"
+      - name: Cr
