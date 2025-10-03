@@ -8,10 +8,11 @@ on:
       - '.github/workflows/api_deployment.yml'
   workflow_dispatch:
 
+# ---- EDIT these defaults (ACR_NAME must be globally unique; letters+numbers only) ----
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio     # <-- CHANGE: letters+numbers only, must be globally unique
+  ACR_NAME: lcacrio        # <-- change to UNIQUE, alphanumeric only (e.g., lcacr987654)
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
@@ -27,7 +28,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}   # SP JSON from: az ad sp create-for-rbac --sdk-auth
 
       - name: Set subscription
         shell: bash
@@ -36,7 +37,7 @@ jobs:
           az account set --subscription "$SUB_ID"
           az account show -o table
 
-      # Register providers once per subscription
+      # ---------- Register required resource providers (first-run safe) ----------
       - name: Register resource providers
         shell: bash
         run: |
@@ -44,19 +45,19 @@ jobs:
           for NS in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights; do
             echo "Ensuring $NS is Registered..."
             az provider register --namespace "$NS" >/dev/null 2>&1 || true
-            for i in {1..30}; do
+            for _ in {1..30}; do
               STATE=$(az provider show --namespace "$NS" --query registrationState -o tsv 2>/dev/null || echo NotRegistered)
               echo "  $NS: $STATE"
               [ "$STATE" = "Registered" ] && break || sleep 5
             done
-            FINAL=$(az provider show --namespace "$NS" --query registrationState -o tsv)
+            FINAL=$(az provider show --namespace "$NS" --query registrationState -o tsv 2>/dev/null || echo NotRegistered)
             [ "$FINAL" = "Registered" ] || { echo "::error::$NS not registered"; exit 1; }
           done
 
       - name: Create/ensure Resource Group
         run: az group create -n "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION"
 
-      # ---------- Registry (no 'az acr wait' — poll provisioningState instead) ----------
+      # ---------- Registry (create if missing; no 'az acr wait') ----------
       - name: Ensure ACR exists
         shell: bash
         run: |
@@ -69,7 +70,7 @@ jobs:
           fi
 
           echo "Waiting for ACR provisioning to finish..."
-          for i in {1..60}; do
+          for _ in {1..60}; do
             STATE=$(az acr show -n "$ACR_NAME" --query "provisioningState" -o tsv 2>/dev/null || echo "Creating")
             echo "  provisioningState=$STATE"
             [ "$STATE" = "Succeeded" ] && break || sleep 5
@@ -100,34 +101,41 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SWA_URL: ${{ secrets.SWA_URL }}     # optional CORS lock to your SWA
+          SWA_URL: ${{ secrets.SWA_URL }}     # optional: lock CORS to your SWA domain
         run: |
           set -euo pipefail
           ALLOWED="${SWA_URL:-*}"
           IMAGE="$ACR_NAME.azurecr.io/$IMAGE_NAME:latest"
 
           if az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1; then
+            echo "App exists — updating image/env..."
             az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
               --image "$IMAGE" \
-              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED" \
-              --secrets openai-key="$OPENAI_API_KEY" \
-              --replace-secrets
+              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
           else
+            echo "Creating app..."
             az containerapp create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
               --environment "$CONTAINERAPPS_ENV" \
               --ingress external --target-port 8000 \
               --image "$IMAGE" \
-              --registry-server "$ACR_NAME.azurecr.io" \
-              --assign-identity \
-              --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED" \
-              --secrets openai-key="$OPENAI_API_KEY" \
-              --secret-env-vars OPENAI_API_KEY=secretref:openai-key
+              --system-assigned \
+              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
           fi
 
-          # Ensure AcrPull for the app's managed identity
+          # Wire ACR with system-assigned identity
+          az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+            --server "$ACR_NAME.azurecr.io" --identity system
+
+          # Give the app's identity AcrPull on the registry (idempotent)
           ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
           APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
           az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
+
+          # Secret for OpenAI API key, then reference via env
+          az containerapp secret set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+            --secrets openai-key="$OPENAI_API_KEY"
+          az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+            --set-env-vars OPENAI_API_KEY=secretref:openai-key
 
       - name: Output API URL
         id: out
