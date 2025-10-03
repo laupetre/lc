@@ -11,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
-raise RuntimeError("OPENAI_API_KEY is required (no Key Vault in this setup)")
+    raise RuntimeError("OPENAI_API_KEY is required (no Key Vault in this setup)")
 
 
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -30,29 +30,29 @@ allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 
 
 class ChatIn(BaseModel):
-input: str
-system: Optional[str] = None
+    input: str
+    system: Optional[str] = None
 
 
 class ChatOut(BaseModel):
-output: str
-model: str
+    output: str
+    model: str
 
 
 @app.get("/healthz")
 def healthz():
-return {"status": "ok", "model": MODEL}
+    return {"status": "ok", "model": MODEL}
 
 
 @app.post("/chat", response_model=ChatOut)
 async def chat(body: ChatIn):
-try:
-if body.system:
-local_prompt = ChatPromptTemplate.from_messages([("system", body.system), ("human", "{input}")])
-local_chain = local_prompt | llm | (lambda msg: msg.content)
-out = await local_chain.ainvoke({"input": body.input})
-else:
-out = await chain.ainvoke({"input": body.input})
-return ChatOut(output=out, model=MODEL)
-except Exception as e:
-raise HTTPException(status_code=500, detail=str(e))
+    try:
+        if body.system:
+            local_prompt = ChatPromptTemplate.from_messages([("system", body.system), ("human", "{input}")])
+            local_chain = local_prompt | llm | (lambda msg: msg.content)
+            out = await local_chain.ainvoke({"input": body.input})
+        else:
+            out = await chain.ainvoke({"input": body.input})
+        return ChatOut(output=out, model=MODEL)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
