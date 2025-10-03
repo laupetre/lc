@@ -12,11 +12,12 @@ on:
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio                  # <- per your preference
+  ACR_NAME: lcacrio                        # <- per your preference (letters/numbers only)
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
   OPENAI_MODEL: gpt-4o-mini
+  LA_WORKSPACE_NAME: lc-swa-law            # Log Analytics workspace for the env
 
 jobs:
   deploy:
@@ -87,21 +88,40 @@ jobs:
           push: true
           tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
-      # ---------- Container Apps ----------
+      # ---------- Container Apps Environment (with Log Analytics) ----------
+      - name: Ensure Log Analytics workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! az monitor log-analytics workspace show -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" >/dev/null 2>&1; then
+            echo "Creating Log Analytics workspace $LA_WORKSPACE_NAME..."
+            az monitor log-analytics workspace create -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" -l "$AZURE_LOCATION"
+          else
+            echo "Log Analytics workspace exists."
+          fi
+
       - name: Setup Container Apps env (and wait until ready)
         shell: bash
         run: |
           set -euo pipefail
           az extension add --name containerapp --upgrade
-          az containerapp env create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" -l "$AZURE_LOCATION" || true
+
+          LAW_ID=$(az monitor log-analytics workspace show -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" --query customerId -o tsv)
+          LAW_KEY=$(az monitor log-analytics workspace get-shared-keys -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" --query primarySharedKey -o tsv)
+
+          # Create or reconcile the environment with explicit Log Analytics
+          az containerapp env create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" -l "$AZURE_LOCATION" \
+            --logs-workspace-id "$LAW_ID" --logs-workspace-key "$LAW_KEY" >/dev/null || true
+
           echo "Waiting for Container Apps Environment to be ready..."
-          for _ in {1..60}; do
-            ENVSTATE=$(az containerapp env show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" --query provisioningState -o tsv 2>/dev/null || echo Creating)
+          for _ in {1..120}; do   # up to ~10 minutes
+            ENVSTATE=$(az containerapp env show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" --query properties.provisioningState -o tsv 2>/dev/null || echo Creating)
             echo "  env provisioningState=$ENVSTATE"
             [ "$ENVSTATE" = "Succeeded" ] && break || sleep 5
           done
           [ "$ENVSTATE" = "Succeeded" ] || { echo "::error::Container Apps Environment not ready"; exit 1; }
 
+      # ---------- Container App (create → link ACR → switch image) ----------
       - name: Create/Update Container App (recover from Failed state)
         shell: bash
         env:
@@ -149,7 +169,6 @@ jobs:
           elif [ "$APPSTATE" != "Succeeded" ]; then
             echo "App exists but provisioningState=$APPSTATE — deleting and recreating."
             az containerapp delete -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --yes
-            # wait until actually gone
             for _ in {1..30}; do
               az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1 || break
               sleep 5
