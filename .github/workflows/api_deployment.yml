@@ -8,11 +8,11 @@ on:
       - '.github/workflows/api_deployment.yml'
   workflow_dispatch:
 
-# ----- Configure defaults (ACR_NAME must be globally unique, letters/numbers only) -----
+# ---- Config (ACR_NAME must be globally unique, letters/numbers only) ----
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio                 # <- per your preference
+  ACR_NAME: lcacrio                  # <- per your preference
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
@@ -28,7 +28,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}   # SP JSON from: az ad sp create-for-rbac --sdk-auth
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Set subscription
         shell: bash
@@ -37,7 +37,7 @@ jobs:
           az account set --subscription "$SUB_ID"
           az account show -o table
 
-      # ---------- Register required resource providers (idempotent) ----------
+      # ---------- Register providers (idempotent) ----------
       - name: Register resource providers
         shell: bash
         run: |
@@ -57,7 +57,7 @@ jobs:
       - name: Create/ensure Resource Group
         run: az group create -n "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION"
 
-      # ---------- ACR (create if missing; poll until Succeeded) ----------
+      # ---------- ACR ----------
       - name: Ensure ACR exists
         shell: bash
         run: |
@@ -88,39 +88,36 @@ jobs:
           tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
       # ---------- Container Apps ----------
-      - name: Setup Container Apps
+      - name: Setup Container Apps env (and wait until ready)
         shell: bash
         run: |
           set -euo pipefail
           az extension add --name containerapp --upgrade
           az containerapp env create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" -l "$AZURE_LOCATION" || true
+          echo "Waiting for Container Apps Environment to be ready..."
+          for _ in {1..60}; do
+            ENVSTATE=$(az containerapp env show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" --query provisioningState -o tsv 2>/dev/null || echo Creating)
+            echo "  env provisioningState=$ENVSTATE"
+            [ "$ENVSTATE" = "Succeeded" ] && break || sleep 5
+          done
+          [ "$ENVSTATE" = "Succeeded" ] || { echo "::error::Container Apps Environment not ready"; exit 1; }
 
-      - name: Create/Update Container App
+      - name: Create/Update Container App (recover from Failed state)
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SWA_URL: ${{ secrets.SWA_URL }}     # optional: lock CORS to your SWA domain
+          SWA_URL: ${{ secrets.SWA_URL }}     # optional CORS lock to your SWA domain
         run: |
           set -euo pipefail
           ALLOWED="${SWA_URL:-*}"
           IMAGE="$ACR_NAME.azurecr.io/$IMAGE_NAME:latest"
           PLACEHOLDER="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 
-          if az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1; then
-            echo "App exists — ensure registry + update image/env..."
-            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --server "$ACR_NAME.azurecr.io" --identity system
+          APPSTATE=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query properties.provisioningState -o tsv 2>/dev/null || echo NotFound)
+          echo "Current app state: $APPSTATE"
 
-            # Ensure AcrPull for the app's identity
-            ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
-            APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
-            az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
-
-            az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --image "$IMAGE" \
-              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
-          else
-            echo "Creating app with public image first (no ACR auth needed)..."
+          recreate_and_link() {
+            echo "Creating app with public image first..."
             az containerapp create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
               --environment "$CONTAINERAPPS_ENV" \
               --ingress external --target-port 8000 \
@@ -128,21 +125,51 @@ jobs:
               --system-assigned \
               --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
 
+            echo "Waiting for identity to appear..."
+            for _ in {1..30}; do
+              PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv 2>/dev/null || echo "")
+              [ -n "$PID" ] && break || sleep 5
+            done
+            [ -n "$PID" ] || { echo "::error::No system identity on app"; exit 1; }
+
             echo "Link ACR using system identity..."
             az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
               --server "$ACR_NAME.azurecr.io" --identity system
 
             echo "Grant AcrPull to the app identity..."
             ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
+            az role assignment create --assignee "$PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
+
+            echo "Switch to your private image..."
+            az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE"
+          }
+
+          if [ "$APPSTATE" = "NotFound" ]; then
+            recreate_and_link
+          elif [ "$APPSTATE" != "Succeeded" ]; then
+            echo "App exists but provisioningState=$APPSTATE — deleting and recreating."
+            az containerapp delete -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --yes
+            # wait until actually gone
+            for _ in {1..30}; do
+              az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1 || break
+              sleep 5
+            done
+            recreate_and_link
+          else
+            echo "App is healthy — ensure registry & update image/env..."
+            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+              --server "$ACR_NAME.azurecr.io" --identity system
+
+            ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
             APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
             az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
 
-            echo "Switch to your private image..."
             az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --image "$IMAGE"
+              --image "$IMAGE" \
+              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
           fi
 
-          # Secret for OpenAI API key, then reference via env
+          echo "Set/refresh secret and reference via env..."
           az containerapp secret set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
             --secrets openai-key="$OPENAI_API_KEY"
           az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
