@@ -11,7 +11,7 @@ on:
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio          # <--- change to UNIQUE, letters+numbers only
+  ACR_NAME: lcacrio         # <-- CHANGE: unique, letters+numbers only
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
@@ -97,7 +97,7 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SWA_URL: ${{ secrets.SWA_URL }}     # optional: lock CORS to your SWA domain
+          SWA_URL: ${{ secrets.SWA_URL }}     # optional CORS lock to your SWA domain
         run: |
           set -euo pipefail
           ALLOWED="${SWA_URL:-*}"
@@ -115,7 +115,7 @@ jobs:
               --ingress external --target-port 8000 \
               --image "$IMAGE" \
               --system-assigned \
-              --environment-variables OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
+              --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
           fi
 
           # Wire ACR with system-assigned identity
