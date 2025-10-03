@@ -12,7 +12,7 @@ on:
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lg-acr-io        # <-- change to a UNIQUE name
+  ACR_NAME: lgACRio        # <-- change to a UNIQUE name
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
