@@ -1,0 +1,28 @@
+name: Deploy Static Web App (frontend)
+on:
+push:
+branches: [ main ]
+paths: [ 'web/**', '.github/workflows/swa_deploy.yml' ]
+
+
+jobs:
+build_and_deploy:
+runs-on: ubuntu-latest
+steps:
+- uses: actions/checkout@v4
+
+
+- name: Inject API URL into config.js
+run: |
+API_URL=${{ secrets.API_BASE_URL || env.API_BASE_URL || 'https://replace-me.example.com' }}
+sed "s#__API_BASE__#$API_URL#g" web/config.template.js > web/config.js
+
+
+- name: Build & Deploy SWA
+uses: Azure/static-web-apps-deploy@v1
+with:
+azure_static_web_apps_api_token: ${{ secrets.AZURE_SWA_TOKEN }}
+repo_token: ${{ secrets.GITHUB_TOKEN }}
+action: upload
+app_location: web
+output_location: ""

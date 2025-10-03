@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LangChain Chat</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header><h1>LangChain Chat</h1></header>
+<main>
+<div id="chat"></div>
+<div class="row">
+<textarea id="input" placeholder="Ask me anything..."></textarea>
+<button id="send">Send</button>
+</div>
+<p id="status" class="status"></p>
+</main>
+<script src="/config.js"></script>
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const send = document.getElementById('send');
+const statusEl = document.getElementById('status');
+
+
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function add(role, text){
+const el = document.createElement('div'); el.className='msg '+(role==='You'?'me':'bot');
+el.innerHTML = `<div class="bubble"><div class="role">${role}</div>${esc(text)}</div>`;
+chat.appendChild(el); chat.scrollTop = chat.scrollHeight;
+}
+async function sendMsg(){
+const q = input.value.trim(); if(!q) return; input.value='';
+add('You', q); send.disabled=true; statusEl.textContent='Thinking...';
+try{
+const r = await fetch(`${window.API_BASE}/chat`, {
+method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ input: q })
+});
+if(!r.ok) throw new Error(await r.text());
+const data = await r.json(); add('Assistant', data.output || '(no output)');
+}catch(e){ add('Assistant', 'Error: '+(e.message||e)); }
+finally{ send.disabled=false; statusEl.textContent=''; input.focus(); }
+}
+send.addEventListener('click', sendMsg);
+input.addEventListener('keydown', e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMsg(); } });
+</script>
+</body>
+</html>
