@@ -8,10 +8,11 @@ on:
       - '.github/workflows/api_deployment.yml'
   workflow_dispatch:
 
+# ----- Configure defaults (ACR_NAME must be globally unique, letters/numbers only) -----
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio         # <-- CHANGE: unique, letters+numbers only
+  ACR_NAME: lcacrio                 # <- per your preference
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
@@ -27,7 +28,7 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}   # SP JSON from: az ad sp create-for-rbac --sdk-auth
 
       - name: Set subscription
         shell: bash
@@ -36,6 +37,7 @@ jobs:
           az account set --subscription "$SUB_ID"
           az account show -o table
 
+      # ---------- Register required resource providers (idempotent) ----------
       - name: Register resource providers
         shell: bash
         run: |
@@ -55,7 +57,7 @@ jobs:
       - name: Create/ensure Resource Group
         run: az group create -n "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION"
 
-      # ---------- ACR ----------
+      # ---------- ACR (create if missing; poll until Succeeded) ----------
       - name: Ensure ACR exists
         shell: bash
         run: |
@@ -97,35 +99,48 @@ jobs:
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SWA_URL: ${{ secrets.SWA_URL }}     # optional CORS lock to your SWA domain
+          SWA_URL: ${{ secrets.SWA_URL }}     # optional: lock CORS to your SWA domain
         run: |
           set -euo pipefail
           ALLOWED="${SWA_URL:-*}"
           IMAGE="$ACR_NAME.azurecr.io/$IMAGE_NAME:latest"
+          PLACEHOLDER="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 
           if az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1; then
-            echo "App exists — updating image/env..."
+            echo "App exists — ensure registry + update image/env..."
+            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+              --server "$ACR_NAME.azurecr.io" --identity system
+
+            # Ensure AcrPull for the app's identity
+            ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
+            APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
+            az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
+
             az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
               --image "$IMAGE" \
               --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
           else
-            echo "Creating app..."
+            echo "Creating app with public image first (no ACR auth needed)..."
             az containerapp create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
               --environment "$CONTAINERAPPS_ENV" \
               --ingress external --target-port 8000 \
-              --image "$IMAGE" \
+              --image "$PLACEHOLDER" \
               --system-assigned \
               --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
+
+            echo "Link ACR using system identity..."
+            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+              --server "$ACR_NAME.azurecr.io" --identity system
+
+            echo "Grant AcrPull to the app identity..."
+            ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
+            APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
+            az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
+
+            echo "Switch to your private image..."
+            az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
+              --image "$IMAGE"
           fi
-
-          # Wire ACR with system-assigned identity
-          az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-            --server "$ACR_NAME.azurecr.io" --identity system
-
-          # Ensure AcrPull for the app's identity
-          ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
-          APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
-          az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
 
           # Secret for OpenAI API key, then reference via env
           az containerapp secret set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
