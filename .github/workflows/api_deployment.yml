@@ -7,17 +7,28 @@ on:
       - 'api/**'
       - '.github/workflows/api_deployment.yml'
   workflow_dispatch:
+    inputs:
+      cleanup:
+        description: "Optional cleanup before deploy: none | revisions | full"
+        required: false
+        default: "none"
+        type: choice
+        options: [none, revisions, full]
+      keep:
+        description: "How many INACTIVE revisions to keep (when cleanup enabled)"
+        required: false
+        default: "5"
+        type: string
 
-# ---- Config (ACR_NAME must be globally unique, letters/numbers only) ----
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio                   # <- per your request
+  ACR_NAME: lcacrio                 # your preferred ACR (alphanumeric only)
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
   OPENAI_MODEL: gpt-4o-mini
-  LA_WORKSPACE_NAME: lc-swa-law       # Log Analytics workspace for the environment
+  LA_WORKSPACE_NAME: lc-swa-law
 
 jobs:
   deploy:
@@ -25,6 +36,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Unified cleanup args:
+      # - On push: parse HEAD commit message for tokens: cleanup=(none|revisions|full) keep=<N>
+      # - On manual run: use inputs.cleanup and inputs.keep
+      - name: Derive cleanup options
+        id: cargs
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_CLEANUP: ${{ github.event.inputs.cleanup }}
+          INPUT_KEEP: ${{ github.event.inputs.keep }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          CLEANUP="${INPUT_CLEANUP:-}"
+          KEEP="${INPUT_KEEP:-}"
+          if [ "${EVENT}" = "push" ]; then
+            if [[ "${MSG:-}" =~ cleanup=(none|revisions|full) ]]; then CLEANUP="${BASH_REMATCH[1]}"; fi
+            if [[ "${MSG:-}" =~ keep=([0-9]+) ]]; then KEEP="${BASH_REMATCH[1]}"; fi
+          fi
+          CLEANUP="${CLEANUP:-none}"
+          KEEP="${KEEP:-5}"
+          echo "cleanup=${CLEANUP}" >> "$GITHUB_OUTPUT"
+          echo "keep=${KEEP}"       >> "$GITHUB_OUTPUT"
+          echo "Cleanup: ${CLEANUP}; keep: ${KEEP}"
 
       - name: Azure Login
         uses: azure/login@v2
@@ -38,190 +74,149 @@ jobs:
           az account set --subscription "$SUB_ID"
           az account show -o table
 
-      # ---------- Register providers (idempotent) ----------
       - name: Register resource providers
         shell: bash
         run: |
           set -euo pipefail
           for NS in Microsoft.ContainerRegistry Microsoft.App Microsoft.OperationalInsights; do
-            echo "Ensuring $NS is Registered..."
             az provider register --namespace "$NS" >/dev/null 2>&1 || true
             for _ in {1..30}; do
               STATE=$(az provider show --namespace "$NS" --query registrationState -o tsv 2>/dev/null || echo NotRegistered)
-              echo "  $NS: $STATE"
               [ "$STATE" = "Registered" ] && break || sleep 5
             done
             FINAL=$(az provider show --namespace "$NS" --query registrationState -o tsv 2>/dev/null || echo NotRegistered)
             [ "$FINAL" = "Registered" ] || { echo "::error::$NS not registered"; exit 1; }
           done
 
-      - name: Create/ensure Resource Group
+      - name: Ensure Resource Group
         run: az group create -n "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION"
 
-      # ---------- ACR ----------
       - name: Ensure ACR exists
         shell: bash
         run: |
           set -euo pipefail
           if ! az acr show -n "$ACR_NAME" --query name -o tsv >/dev/null 2>&1; then
-            echo "Creating ACR $ACR_NAME in $AZURE_RESOURCE_GROUP/$AZURE_LOCATION..."
-            az acr create -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" -l "$AZURE_LOCATION" --sku Basic --only-show-errors
-          else
-            echo "ACR $ACR_NAME already exists."
+            az acr create -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" -l "$AZURE_LOCATION" --sku Basic
           fi
-          echo "Waiting for ACR provisioning to finish..."
           for _ in {1..60}; do
             STATE=$(az acr show -n "$ACR_NAME" --query provisioningState -o tsv 2>/dev/null || echo Creating)
-            echo "  provisioningState=$STATE"
             [ "$STATE" = "Succeeded" ] && break || sleep 5
           done
           [ "$STATE" = "Succeeded" ] || { echo "::error::ACR did not reach Succeeded"; exit 1; }
-          az acr show -n "$ACR_NAME" --query "{loginServer:loginServer,sku:sku.name}" -o tsv
 
       - name: ACR login (AAD)
         run: az acr login -n "$ACR_NAME"
 
-      - name: Build & push image
+      - name: Build & push image (latest + SHA)
         uses: docker/build-push-action@v5
         with:
           context: ./api
           push: true
-          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          tags: |
+            ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+            ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-      # ---------- Container Apps Environment with Log Analytics ----------
       - name: Ensure Log Analytics workspace
         shell: bash
         run: |
           set -euo pipefail
           if ! az monitor log-analytics workspace show -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" >/dev/null 2>&1; then
-            echo "Creating Log Analytics workspace $LA_WORKSPACE_NAME..."
             az monitor log-analytics workspace create -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" -l "$AZURE_LOCATION"
-          else
-            echo "Log Analytics workspace exists."
           fi
 
-      - name: Setup Container Apps env (and wait until ready)
+      - name: Ensure Container Apps Environment (and wait)
         shell: bash
         run: |
           set -euo pipefail
           az extension add --name containerapp --upgrade
-
           LAW_ID=$(az monitor log-analytics workspace show -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" --query customerId -o tsv)
           LAW_KEY=$(az monitor log-analytics workspace get-shared-keys -g "$AZURE_RESOURCE_GROUP" -n "$LA_WORKSPACE_NAME" --query primarySharedKey -o tsv)
-
           az containerapp env create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" -l "$AZURE_LOCATION" \
             --logs-workspace-id "$LAW_ID" --logs-workspace-key "$LAW_KEY" >/dev/null || true
-
-          echo "Waiting for Container Apps Environment to be ready..."
           for _ in {1..120}; do
             ENVSTATE=$(az containerapp env show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPPS_ENV" --query properties.provisioningState -o tsv 2>/dev/null || echo Creating)
-            echo "  env provisioningState=$ENVSTATE"
             [ "$ENVSTATE" = "Succeeded" ] && break || sleep 5
           done
           [ "$ENVSTATE" = "Succeeded" ] || { echo "::error::Container Apps Environment not ready"; exit 1; }
 
-      # ---------- Container App (create with public image -> link ACR -> switch image) ----------
-      - name: Create/Update Container App (with robust ACR auth)
+      # -------- Optional cleanup (unified: cleanup & keep) --------
+      - name: Optional pre-deploy cleanup
+        if: ${{ steps.cargs.outputs.cleanup != 'none' }}
+        shell: bash
+        env:
+          CLEANUP: ${{ steps.cargs.outputs.cleanup }}
+          KEEP_N: ${{ steps.cargs.outputs.keep }}
+        run: |
+          set -euo pipefail
+          echo "Cleanup=${CLEANUP} (keep inactive: ${KEEP_N})"
+          az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --revision-mode Single >/dev/null 2>&1 || true
+
+          if az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1; then
+            if [ "$CLEANUP" = "revisions" ] || [ "$CLEANUP" = "full" ]; then
+              mapfile -t INACTIVE < <(az containerapp revision list -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query "[?active==\`false\`].name" -o tsv | tac)
+              COUNT=${#INACTIVE[@]}
+              if [ "$COUNT" -gt "$KEEP_N" ]; then
+                TO_DELETE=$((COUNT-KEEP_N))
+                idx=0
+                for rev in "${INACTIVE[@]}"; do
+                  idx=$((idx+1))
+                  [ "$idx" -le "$TO_DELETE" ] || break
+                  az containerapp revision delete -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --revision "$rev" --yes || true
+                done
+              fi
+            fi
+          fi
+
+          if [ "$CLEANUP" = "full" ]; then
+            mapfile -t MANIFESTS < <(az acr repository show-manifests -n "$ACR_NAME" --repository "$IMAGE_NAME" --query "[?tags==null].digest" -o tsv 2>/dev/null || echo "")
+            for dg in "${MANIFESTS[@]}"; do
+              [ -n "$dg" ] || continue
+              az acr repository delete -n "$ACR_NAME" --image "$IMAGE_NAME@$dg" --yes || true
+            done
+          fi
+
+      # -------- Deploy / Update the Container App --------
+      - name: Create/Update Container App (robust ACR auth)
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SWA_URL: ${{ secrets.SWA_URL }}     # optional CORS lock to your SWA domain
         run: |
           set -euo pipefail
-          ALLOWED="${SWA_URL:-*}"
-          IMAGE="$ACR_NAME.azurecr.io/$IMAGE_NAME:latest"
+          IMAGE="$ACR_NAME.azurecr.io/$IMAGE_NAME:${GITHUB_SHA}"
           PLACEHOLDER="mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 
-          # Helper: link ACR via system identity + grant AcrPull + wait for propagation
           link_acr_and_wait() {
-            echo "Linking ACR to app using system identity..."
-            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --server "$ACR_NAME.azurecr.io" --identity system
-
+            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --server "$ACR_NAME.azurecr.io" --identity system
             ACR_ID=$(az acr show -g "$AZURE_RESOURCE_GROUP" -n "$ACR_NAME" --query id -o tsv)
             APP_PID=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query identity.principalId -o tsv)
-
-            echo "Granting AcrPull to app identity..."
             az role assignment create --assignee "$APP_PID" --role AcrPull --scope "$ACR_ID" >/dev/null 2>&1 || true
-
-            echo "Waiting for AcrPull role assignment to propagate..."
             for _ in {1..36}; do
               GOT=$(az role assignment list --assignee "$APP_PID" --scope "$ACR_ID" --role AcrPull --query "[0].roleDefinitionName" -o tsv 2>/dev/null || echo "")
               [ "$GOT" = "AcrPull" ] && break || sleep 5
             done
-
-            echo "Waiting for registry to show on app..."
-            for _ in {1..30}; do
-              FOUND=$(az containerapp registry list -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query "[?server=='$ACR_NAME.azurecr.io'] | length(@)" -o tsv 2>/dev/null || echo "0")
-              [ "$FOUND" = "1" ] && break || sleep 5
-            done
           }
 
-          # Helper: fallback to ACR admin creds if identity pull still fails
-          fallback_to_admin_creds() {
-            echo "Falling back to ACR admin credentials..."
+          fallback_to_admin() {
             az acr update -n "$ACR_NAME" --admin-enabled true
             U=$(az acr credential show -n "$ACR_NAME" --query username -o tsv)
             P=$(az acr credential show -n "$ACR_NAME" --query passwords[0].value -o tsv)
-            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --server "$ACR_NAME.azurecr.io" --username "$U" --password "$P"
+            az containerapp registry set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --server "$ACR_NAME.azurecr.io" --username "$U" --password "$P"
           }
 
           APPSTATE=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query properties.provisioningState -o tsv 2>/dev/null || echo NotFound)
-          echo "Current app state: $APPSTATE"
-
           if [ "$APPSTATE" = "NotFound" ]; then
-            echo "Creating app with public image first (no ACR auth needed)..."
             az containerapp create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --environment "$CONTAINERAPPS_ENV" \
-              --ingress external --target-port 8000 \
-              --image "$PLACEHOLDER" \
-              --system-assigned \
-              --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
+              --environment "$CONTAINERAPPS_ENV" --ingress external --target-port 8000 \
+              --image "$PLACEHOLDER" --system-assigned --env-vars OPENAI_MODEL="$OPENAI_MODEL"
             link_acr_and_wait
-            echo "Switching to private image..."
-            if ! az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE"; then
-              fallback_to_admin_creds
-              az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE"
-            fi
-          elif [ "$APPSTATE" != "Succeeded" ]; then
-            echo "App exists but provisioningState=$APPSTATE — deleting and recreating."
-            az containerapp delete -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --yes
-            for _ in {1..30}; do
-              az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" >/dev/null 2>&1 || break
-              sleep 5
-            done
-            echo "Recreating with public image..."
-            az containerapp create -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --environment "$CONTAINERAPPS_ENV" \
-              --ingress external --target-port 8000 \
-              --image "$PLACEHOLDER" \
-              --system-assigned \
-              --env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
-            link_acr_and_wait
-            echo "Switching to private image..."
-            if ! az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE"; then
-              fallback_to_admin_creds
-              az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE"
-            fi
+            az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE" || { fallback_to_admin; az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE"; }
           else
-            echo "App healthy — ensure registry & update image/env..."
             link_acr_and_wait
-            if ! az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-              --image "$IMAGE" \
-              --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"; then
-              fallback_to_admin_creds
-              az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-                --image "$IMAGE" \
-                --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" ALLOWED_ORIGIN="$ALLOWED"
-            fi
+            az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE" --set-env-vars OPENAI_MODEL="$OPENAI_MODEL" || { fallback_to_admin; az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --image "$IMAGE" --set-env-vars OPENAI_MODEL="$OPENAI_MODEL"; }
           fi
 
-          echo "Set/refresh secret and reference via env..."
-          az containerapp secret set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-            --secrets openai-key="${OPENAI_API_KEY}"
-          az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-            --set-env-vars OPENAI_API_KEY=secretref:openai-key
+          az containerapp secret set -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --secrets openai-key="$OPENAI_API_KEY"
+          az containerapp update -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --set-env-vars OPENAI_API_KEY=secretref:openai-key
 
       - name: Output API URL
         id: out

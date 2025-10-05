@@ -7,19 +7,56 @@ on:
       - 'web/**'
       - '.github/workflows/swa_deploy.yml'
   workflow_dispatch:
-
-# Adjust these if your RG/app names differ
-env:
-  AZURE_RESOURCE_GROUP: lc-swa-rg
-  CONTAINERAPP_NAME: lc-swa-api
+    inputs:
+      api_url:
+        description: "Override API base URL (optional)"
+        required: false
+        type: string
+      cleanup:
+        description: "Optional cleanup before deploy: none | previews_all"
+        required: false
+        default: "none"
+        type: choice
+        options: [none, previews_all]
+  # Auto-run after API workflow success
+  workflow_run:
+    workflows: ["Deploy API (Container Apps)"]
+    types: [completed]
 
 jobs:
   build_and_deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      # Login only to read the Container App FQDN
+    env:
+      AZURE_RESOURCE_GROUP: lc-swa-rg
+      CONTAINERAPP_NAME: lc-swa-api
+      SWA_NAME: lc-swa-web   # <-- set to your SWA resource name
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Unified cleanup for SWA:
+      # - On push: parse HEAD commit message for token cleanup=previews_all
+      # - On manual run: use inputs.cleanup
+      - name: Derive SWA cleanup
+        id: sclean
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_CLEANUP: ${{ github.event.inputs.cleanup }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          CLEANUP="${INPUT_CLEANUP:-}"
+          if [ "${EVENT}" = "push" ]; then
+            if [[ "${MSG:-}" =~ cleanup=previews_all ]]; then CLEANUP="previews_all"; fi
+          fi
+          CLEANUP="${CLEANUP:-none}"
+          echo "cleanup=${CLEANUP}" >> "$GITHUB_OUTPUT"
+          echo "SWA cleanup: ${CLEANUP}"
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -32,53 +69,59 @@ jobs:
           az account set --subscription "$SUB_ID"
           az account show -o table
 
-      - name: Fetch API URL from Container Apps
-        id: api
+      - name: Optional pre-deploy cleanup (preview environments)
+        if: ${{ steps.sclean.outputs.cleanup == 'previews_all' }}
         shell: bash
+        env:
+          SWA_NAME: ${{ env.SWA_NAME }}
+          RG: ${{ env.AZURE_RESOURCE_GROUP }}
         run: |
           set -euo pipefail
-          FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" \
-                  --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)
-          if [ -n "$FQDN" ]; then
-            echo "api_url=https://$FQDN" >> "$GITHUB_OUTPUT"
-          else
-            echo "api_url=" >> "$GITHUB_OUTPUT"
-            echo "No live Container App FQDN found; will try fallback secret."
+          if ! az staticwebapp show -n "$SWA_NAME" -g "$RG" >/dev/null 2>&1; then
+            echo "::warning::SWA '$SWA_NAME' not found in '$RG'. Skipping cleanup."
+            exit 0
           fi
+          mapfile -t PREVIEW_ENVS < <(az staticwebapp environment list -n "$SWA_NAME" -g "$RG" --query "[?name!='default'].name" -o tsv 2>/dev/null || echo "")
+          for env in "${PREVIEW_ENVS[@]}"; do
+            [ -n "$env" ] || continue
+            echo "Deleting preview environment: $env"
+            az staticwebapp environment delete -n "$SWA_NAME" -g "$RG" --environment-name "$env" --yes || true
+          done
 
-      - name: Resolve API URL (prefer live, else secret)
+      - name: Resolve API URL (input > live Container App > secret)
         id: resolve
         shell: bash
         env:
-          LIVE_URL: ${{ steps.api.outputs.api_url }}
-          SECRET_URL: ${{ secrets.API_BASE_URL }}
+          INPUT_API_URL: ${{ github.event.inputs.api_url }}
+          SECRET_API_URL: ${{ secrets.API_BASE_URL }}
         run: |
           set -euo pipefail
-          API_URL="${LIVE_URL:-$SECRET_URL}"
+          API_URL="${INPUT_API_URL:-}"
           if [ -z "$API_URL" ]; then
-            echo "::error::API URL not found. Ensure the API workflow has deployed, or set secrets.API_BASE_URL."
+            FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)
+            [ -n "$FQDN" ] && API_URL="https://${FQDN}"
+          fi
+          [ -z "$API_URL" ] && API_URL="${SECRET_API_URL:-}"
+          if [ -z "$API_URL" ]; then
+            echo "::error::Could not determine API URL. Provide 'api_url' input or set secrets.API_BASE_URL."
             exit 1
           fi
           echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
           echo "Using API_URL=$API_URL"
 
-      # Inject API URL into your static site
-      # If you have a template at web/config.template.js with placeholder __API_BASE__,
-      # we'll render web/config.js. Otherwise we create a simple config.js.
       - name: Inject API URL into config.js
         shell: bash
         env:
           API_URL: ${{ steps.resolve.outputs.api_url }}
         run: |
+          set -euo pipefail
           if [ -f web/config.template.js ]; then
             sed "s#__API_BASE__#${API_URL}#g" web/config.template.js > web/config.js
           else
             mkdir -p web
             echo "export const API_BASE_URL='${API_URL}';" > web/config.js
           fi
-          head -n 1 web/config.js || true
 
-      # If you build (npm/yarn) add steps here to produce a "dist" folder and set output_location: dist
       - name: Deploy SWA
         uses: Azure/static-web-apps-deploy@v1
         with:
