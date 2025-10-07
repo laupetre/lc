@@ -36,14 +36,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Service Principal login (JSON in AZURE_CREDENTIALS secret)
+      # ---- Login with Service Principal JSON ----
       - name: Azure login (Service Principal JSON)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # >>> IMPORTANT: Export ARM_* vars so Terraform uses SP auth (not Azure CLI)
-      - name: Export ARM_* env for Terraform (from AZURE_CREDENTIALS)
+      # ---- Export ARM_* so Terraform uses SP auth (not CLI user) ----
+      - name: Export ARM_* env for Terraform
         id: armenv
         shell: bash
         run: |
@@ -51,27 +51,19 @@ jobs:
           cat > sp.json <<'JSON'
           ${{ secrets.AZURE_CREDENTIALS }}
           JSON
-          ARM_CLIENT_ID=$(jq -r '.clientId' sp.json)
-          ARM_CLIENT_SECRET=$(jq -r '.clientSecret' sp.json)
-          ARM_TENANT_ID=$(jq -r '.tenantId' sp.json)
-          ARM_SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)
-
-          echo "ARM_CLIENT_ID=$ARM_CLIENT_ID"           >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=$ARM_CLIENT_SECRET"   >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=$ARM_TENANT_ID"           >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=$ARM_SUBSCRIPTION_ID" >> $GITHUB_ENV
-
-          # Optional niceties
-          echo "ARM_SKIP_PROVIDER_REGISTRATION=true"    >> $GITHUB_ENV
-          # Ensure secrets are masked
-          echo "::add-mask::$ARM_CLIENT_SECRET"
+          echo "ARM_CLIENT_ID=$(jq -r '.clientId' sp.json)"           >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=$(jq -r '.clientSecret' sp.json)"   >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=$(jq -r '.tenantId' sp.json)"           >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)" >> $GITHUB_ENV
+          echo "ARM_SKIP_PROVIDER_REGISTRATION=true"                  >> $GITHUB_ENV
+          echo "::add-mask::$(jq -r '.clientSecret' sp.json)"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.6
 
-      # Create AAD-backed remote state (no shared keys)
+      # ---- Create AAD-backed remote state (no shared keys) ----
       - name: Create/ensure tfstate backend (RG/SA/Container)
         shell: bash
         run: |
@@ -80,12 +72,39 @@ jobs:
           echo "SANITIZED_SA=${SA_TRUNC}" >> $GITHUB_ENV
 
           az group create -n "${TFSTATE_RG}" -l "${LOCATION}" 1>/dev/null
+
           if ! az storage account show -g "${TFSTATE_RG}" -n "${SA_TRUNC}" >/dev/null 2>&1; then
             az storage account create \
               -g "${TFSTATE_RG}" -n "${SA_TRUNC}" -l "${LOCATION}" \
               --sku Standard_LRS --kind StorageV2 --allow-shared-key-access false 1>/dev/null
           fi
+
+          # management-plane create of the container
           az storage container-rm create -g "${TFSTATE_RG}" -a "${SA_TRUNC}" -n "${TFSTATE_CONTAINER}" 1>/dev/null || true
+
+      # ---- Grant data-plane RBAC for the SP on the tfstate CONTAINER ----
+      - name: Grant Storage Blob Data Contributor on tfstate container
+        shell: bash
+        run: |
+          set -euo pipefail
+          storage_id=$(az storage account show -g "${TFSTATE_RG}" -n "${SANITIZED_SA}" --query id -o tsv)
+          container_scope="${storage_id}/blobServices/default/containers/${TFSTATE_CONTAINER}"
+
+          # Assign role to the SP (using appId works; avoids graph lookup)
+          az role assignment create \
+            --assignee "${ARM_CLIENT_ID}" \
+            --role "Storage Blob Data Contributor" \
+            --scope "${container_scope}" >/dev/null 2>&1 || true
+
+          # Wait for RBAC propagation (up to ~2 min)
+          for i in {1..24}; do
+            got=$(az role assignment list \
+                  --assignee "${ARM_CLIENT_ID}" \
+                  --scope "${container_scope}" \
+                  --role "Storage Blob Data Contributor" \
+                  --query "[0].roleDefinitionName" -o tsv 2>/dev/null || echo "")
+            [ "$got" = "Storage Blob Data Contributor" ] && break || sleep 5
+          done
 
       - name: Terraform init (AAD backend via SP)
         working-directory: ${{ inputs.tf_dir }}
