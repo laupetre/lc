@@ -1,0 +1,100 @@
+name: Provision Azure infra (Terraform)
+
+on:
+  workflow_call:
+    inputs:
+      tf_dir:
+        required: false
+        type: string
+        default: "infra"
+  workflow_dispatch:
+    inputs:
+      tf_dir:
+        description: "Terraform folder"
+        required: false
+        default: "infra"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  LOCATION: eastus
+  TFSTATE_RG: tfstate-rg
+  TFSTATE_SA: tfstate-${{ github.repository_owner }}-${{ github.event.repository.name }}
+  TFSTATE_CONTAINER: tfstate
+  TFSTATE_KEY: prod.terraform.tfstate
+
+jobs:
+  plan-apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # LOGIN WITH SERVICE PRINCIPAL JSON (no OIDC)
+      - name: Azure login (Service Principal JSON)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Create/ensure tfstate backend (RG/SA/Container)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SA_RAW="${TFSTATE_SA,,}"; SA_RAW="${SA_RAW//[^a-z0-9]/}"; SA_TRUNC="${SA_RAW:0:23}"
+          echo "SANITIZED_SA=${SA_TRUNC}" >> $GITHUB_ENV
+          az group create -n "${TFSTATE_RG}" -l "${LOCATION}" 1>/dev/null
+          if ! az storage account show -g "${TFSTATE_RG}" -n "${SA_TRUNC}" >/dev/null 2>&1; then
+            az storage account create -g "${TFSTATE_RG}" -n "${SA_TRUNC}" -l "${LOCATION}" \
+              --sku Standard_LRS --kind StorageV2 --allow-shared-key-access false 1>/dev/null
+          fi
+          az storage container-rm create -g "${TFSTATE_RG}" -a "${SA_TRUNC}" -n "${TFSTATE_CONTAINER}" 1>/dev/null || true
+
+      - name: Terraform init (AAD backend via SP login)
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          terraform init \
+            -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RG}" \
+            -backend-config="storage_account_name=${SANITIZED_SA}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER}" \
+            -backend-config="key=${TFSTATE_KEY}" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: Terraform fmt
+        working-directory: ${{ inputs.tf_dir }}
+        run: terraform fmt -check
+
+      - name: Terraform validate
+        working-directory: ${{ inputs.tf_dir }}
+        run: terraform validate
+
+      - name: Terraform plan
+        id: plan
+        working-directory: ${{ inputs.tf_dir }}
+        env:
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ inputs.tf_dir }}
+        env:
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Outputs
+        if: github.ref == 'refs/heads/main'
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          terraform output -json | jq .
