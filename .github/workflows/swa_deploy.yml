@@ -23,23 +23,53 @@ on:
     workflows: ["Deploy API (Container Apps)"]
     types: [completed]
 
+# Prevent overlapping prod deploys on the same branch
+concurrency:
+  group: prod-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build_and_deploy:
+    # Only run after API when it succeeded (for workflow_run)
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     env:
+      # ---- adjust to your resource names ----
       AZURE_RESOURCE_GROUP: lc-swa-rg
       CONTAINERAPP_NAME: lc-swa-api
-      SWA_NAME: lc-swa-web   # <-- set to your SWA resource name
+      SWA_NAME: lc-swa-web
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Unified cleanup for SWA:
-      # - On push: parse HEAD commit message for token cleanup=previews_all
-      # - On manual run: use inputs.cleanup
+      # If this push also changed api/**, skip this run and let workflow_run (after API) deploy instead
+      - name: Detect changed folders
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          filters: |
+            api:
+              - 'api/**'
+            web:
+              - 'web/**'
+
+      - name: Gate SWA on push when API changed
+        id: gate
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ "${{ steps.changes.outputs.api }}" = "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "API changed in this push — skipping SWA push deploy. It will run after API via workflow_run."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Unified cleanup flag (commit token or manual input)
+      # - Push: add [cleanup=previews_all] in the commit message
+      # - Manual: choose the 'cleanup' input
       - name: Derive SWA cleanup
         id: sclean
         shell: bash
@@ -57,20 +87,31 @@ jobs:
           echo "cleanup=${CLEANUP}" >> "$GITHUB_OUTPUT"
           echo "SWA cleanup: ${CLEANUP}"
 
+      # ----- Azure auth & extensions -----
       - name: Azure Login
+        if: ${{ steps.gate.outputs.skip != 'true' }}
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Set subscription
+        if: ${{ steps.gate.outputs.skip != 'true' }}
         shell: bash
         run: |
           SUB_ID=$(jq -r '.subscriptionId' <<< '${{ secrets.AZURE_CREDENTIALS }}')
           az account set --subscription "$SUB_ID"
           az account show -o table
 
+      - name: Ensure CLI extensions
+        if: ${{ steps.gate.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          az extension add --name containerapp --upgrade
+          az extension add --name staticwebapp --upgrade || true
+
+      # ----- Optional cleanup of preview environments -----
       - name: Optional pre-deploy cleanup (preview environments)
-        if: ${{ steps.sclean.outputs.cleanup == 'previews_all' }}
+        if: ${{ steps.gate.outputs.skip != 'true' && steps.sclean.outputs.cleanup == 'previews_all' }}
         shell: bash
         env:
           SWA_NAME: ${{ env.SWA_NAME }}
@@ -81,24 +122,33 @@ jobs:
             echo "::warning::SWA '$SWA_NAME' not found in '$RG'. Skipping cleanup."
             exit 0
           fi
-          mapfile -t PREVIEW_ENVS < <(az staticwebapp environment list -n "$SWA_NAME" -g "$RG" --query "[?name!='default'].name" -o tsv 2>/dev/null || echo "")
-          for env in "${PREVIEW_ENVS[@]}"; do
-            [ -n "$env" ] || continue
-            echo "Deleting preview environment: $env"
-            az staticwebapp environment delete -n "$SWA_NAME" -g "$RG" --environment-name "$env" --yes || true
-          done
+          mapfile -t PREVIEW_ENVS < <(az staticwebapp environment list -n "$SWA_NAME" -g "$RG" \
+            --query "[?name!='default'].name" -o tsv 2>/dev/null || echo "")
+          if [ ${#PREVIEW_ENVS[@]} -eq 0 ]; then
+            echo "No preview environments to delete."
+          else
+            for env in "${PREVIEW_ENVS[@]}"; do
+              [ -n "$env" ] || continue
+              echo "Deleting preview environment: $env"
+              az staticwebapp environment delete -n "$SWA_NAME" -g "$RG" --environment-name "$env" --yes || true
+            done
+          fi
 
-      - name: Resolve API URL (input > live Container App > secret)
+      # ----- Resolve API URL: input > live Container App > secret fallback -----
+      - name: Resolve API URL
+        if: ${{ steps.gate.outputs.skip != 'true' }}
         id: resolve
         shell: bash
         env:
           INPUT_API_URL: ${{ github.event.inputs.api_url }}
           SECRET_API_URL: ${{ secrets.API_BASE_URL }}
+          RG: ${{ env.AZURE_RESOURCE_GROUP }}
+          APP: ${{ env.CONTAINERAPP_NAME }}
         run: |
           set -euo pipefail
           API_URL="${INPUT_API_URL:-}"
           if [ -z "$API_URL" ]; then
-            FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)
+            FQDN=$(az containerapp show -g "$RG" -n "$APP" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)
             [ -n "$FQDN" ] && API_URL="https://${FQDN}"
           fi
           [ -z "$API_URL" ] && API_URL="${SECRET_API_URL:-}"
@@ -109,7 +159,9 @@ jobs:
           echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
           echo "Using API_URL=$API_URL"
 
+      # ----- Inject runtime config into /web -----
       - name: Inject API URL into config.js
+        if: ${{ steps.gate.outputs.skip != 'true' }}
         shell: bash
         env:
           API_URL: ${{ steps.resolve.outputs.api_url }}
@@ -122,10 +174,30 @@ jobs:
             echo "export const API_BASE_URL='${API_URL}';" > web/config.js
           fi
 
+      # ----- Obtain the SWA deployment token dynamically from Azure -----
+      - name: Get SWA deployment token from Azure
+        if: ${{ steps.gate.outputs.skip != 'true' }}
+        id: swatoken
+        shell: bash
+        env:
+          SWA_NAME: ${{ env.SWA_NAME }}
+          RG: ${{ env.AZURE_RESOURCE_GROUP }}
+        run: |
+          set -euo pipefail
+          TOK=$(az staticwebapp secrets list -n "$SWA_NAME" -g "$RG" --query properties.apiKey -o tsv)
+          if [ -z "$TOK" ]; then
+            echo "::error::Could not fetch SWA deployment token. Verify SWA_NAME and resource group."
+            exit 1
+          fi
+          echo "::add-mask::$TOK"
+          echo "token=$TOK" >> "$GITHUB_OUTPUT"
+
+      # ----- Deploy SWA using the fetched token -----
       - name: Deploy SWA
+        if: ${{ steps.gate.outputs.skip != 'true' }}
         uses: Azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_SWA_TOKEN }}
+          azure_static_web_apps_api_token: ${{ steps.swatoken.outputs.token }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: upload
           app_location: web

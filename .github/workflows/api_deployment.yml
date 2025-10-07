@@ -20,10 +20,15 @@ on:
         default: "5"
         type: string
 
+# Prevent overlapping API/SWA deploys on the same branch
+concurrency:
+  group: prod-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   AZURE_RESOURCE_GROUP: lc-swa-rg
   AZURE_LOCATION: eastus
-  ACR_NAME: lcacrio                 # your preferred ACR (alphanumeric only)
+  ACR_NAME: lcacrio
   CONTAINERAPPS_ENV: lc-swa-env
   CONTAINERAPP_NAME: lc-swa-api
   IMAGE_NAME: lc-swa-api
@@ -33,13 +38,13 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.out.outputs.api_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Unified cleanup args:
-      # - On push: parse HEAD commit message for tokens: cleanup=(none|revisions|full) keep=<N>
-      # - On manual run: use inputs.cleanup and inputs.keep
+      # Unified cleanup args (commit tokens or manual inputs)
       - name: Derive cleanup options
         id: cargs
         shell: bash
