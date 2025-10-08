@@ -41,12 +41,9 @@ resource "azurerm_container_app" "api" {
   container_app_environment_id = azurerm_container_app_environment.env.id
   revision_mode                = "Single"
 
-  # Managed Identity (also useful for AcrPull if you switch from admin creds)
-  identity {
-    type = "SystemAssigned"
-  }
+  identity { type = "SystemAssigned" }
 
-  # Registry configuration (kept here for when the workflow switches to ACR image)
+  # Registry kept for later when you switch to ACR image
   registry {
     server               = azurerm_container_registry.acr.login_server
     username             = azurerm_container_registry.acr.admin_username
@@ -66,11 +63,9 @@ resource "azurerm_container_app" "api" {
 
   template {
     container {
-      name = "api"
-
-      # Seed with a public image so creation doesn't depend on ACR having your tag yet
+      name   = "api"
+      # Seed with a public image so creation doesn't depend on ACR tag existing yet
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
-
       cpu    = 0.5
       memory = "1Gi"
 
@@ -85,7 +80,6 @@ resource "azurerm_container_app" "api" {
       }
     }
 
-    # Replace old 'scale' block with these
     min_replicas = 1
     max_replicas = 2
   }
@@ -93,32 +87,9 @@ resource "azurerm_container_app" "api" {
   ingress {
     external_enabled = true
     target_port      = var.container_port
-
-    # At least one traffic_weight is required
     traffic_weight {
       percentage      = 100
       latest_revision = true
     }
   }
-}
-
-############################################
-# Useful outputs (API URL/FQDN and ACR login server)
-############################################
-output "api_hostname" {
-  description = "Container App public host name"
-  value       = azurerm_container_app.api.latest_revision_fqdn
-}
-
-output "api_url" {
-  description = "Container App public URL"
-  value       = "https://${azurerm_container_app.api.latest_revision_fqdn}"
-}
-
-output "container_app_id" {
-  value = azurerm_container_app.api.id
-}
-
-output "acr_login_server" {
-  value = azurerm_container_registry.acr.login_server
 }
