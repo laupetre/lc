@@ -16,12 +16,13 @@ jobs:
     uses: ./.github/workflows/infra_apply.yml
     with:
       tf_dir: infra
+    secrets: inherit              # <-- important: pass repo secrets to child
 
   api:
     name: Deploy API
     needs: infra
     uses: ./.github/workflows/api_deploy.yml
-    secrets: inherit
+    secrets: inherit              # keep passing to API child
 
   swa:
     name: Deploy SWA
@@ -29,4 +30,4 @@ jobs:
     uses: ./.github/workflows/swa_deploy.yml
     with:
       api_base_url: ${{ needs.infra.outputs.api_url }}
-    secrets: inherit
+    secrets: inherit              # keep passing to SWA child

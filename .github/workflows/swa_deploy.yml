@@ -33,11 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Optional: inject API URL into a config file used by your SPA
       - name: Inject API URL into web/config.js
         run: |
           mkdir -p $APP_LOCATION
-          # If you already have a template, adjust the sed accordingly. Here we create/update a simple config.
           echo "window.__API_BASE__ = '${{ inputs.api_base_url }}';" > $APP_LOCATION/config.js
           cat $APP_LOCATION/config.js
 
@@ -48,7 +46,6 @@ jobs:
             npm ci
             npm run build
           else
-            # No build system; just deploy raw web/ as static content
             mkdir -p ../${OUTPUT_LOCATION}
             cp -r . ../${OUTPUT_LOCATION}/
           fi
