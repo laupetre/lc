@@ -43,14 +43,12 @@ resource "azurerm_container_app" "api" {
 
   identity { type = "SystemAssigned" }
 
-  # Registry config retained for when CI switches the image to ACR
   registry {
     server               = azurerm_container_registry.acr.login_server
     username             = azurerm_container_registry.acr.admin_username
     password_secret_name = "acr-pwd"
   }
 
-  # Secrets live at the top level
   secret {
     name  = "acr-pwd"
     value = azurerm_container_registry.acr.admin_password
@@ -64,10 +62,7 @@ resource "azurerm_container_app" "api" {
   template {
     container {
       name   = "api"
-
-      # Public seed image so the app can be created before your ACR tag exists
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
-
       cpu    = 0.5
       memory = "1Gi"
 
@@ -95,4 +90,26 @@ resource "azurerm_container_app" "api" {
       latest_revision = true
     }
   }
+}
+
+############################################
+# --- NEW: Static Web App (classic) + listSecrets token
+############################################
+# Create Static Web App (no repo connection; we deploy with token)
+resource "azurerm_static_site" "swa" {
+  name                = var.swa_name
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku_tier            = "Free"
+  # Optional custom domains etc. can be added later
+}
+
+# Query its secrets to get the deployment API token
+resource "azapi_resource_action" "swa_secrets" {
+  type        = "Microsoft.Web/staticSites@2022-09-01"
+  resource_id = azurerm_static_site.swa.id
+  action      = "listSecrets"
+  method      = "POST"
+
+  response_export_values = ["properties.apiKey"]
 }

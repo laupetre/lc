@@ -48,3 +48,9 @@ variable "openai_api_key" {
   type      = string
   sensitive = true
 }
+
+# --- NEW: Static Web App name (must be globally unique) ---
+variable "swa_name" {
+  type    = string
+  default = "lc-swa-web"
+}

@@ -7,14 +7,21 @@ on:
         description: "API base URL to inject into the web app"
         required: true
         type: string
+      swa_deploy_token:                   # <-- NEW
+        description: "SWA deployment token (from infra)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       api_base_url:
         description: "API base URL to inject into the web app"
         required: true
         type: string
+      swa_deploy_token:                   # optional if you dispatch manually and paste it
+        description: "SWA deployment token (from infra)"
+        required: true
+        type: string
 
-# Different group from parent to avoid deadlock
 concurrency:
   group: swa-${{ github.ref }}
   cancel-in-progress: false
@@ -33,11 +40,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Re-mask the token in this job
+      - name: Mask SWA token
+        run: echo "::add-mask::${{ inputs.swa_deploy_token }}"
+
       - name: Inject API URL into web/config.js
         run: |
-          mkdir -p $APP_LOCATION
-          echo "window.__API_BASE__ = '${{ inputs.api_base_url }}';" > $APP_LOCATION/config.js
-          cat $APP_LOCATION/config.js
+          set -euo pipefail
+          TEMPLATE="${APP_LOCATION}/config.template.js"
+          TARGET="${APP_LOCATION}/config.js"
+          if [ -f "$TEMPLATE" ]; then
+            sed "s|__API_BASE_URL__|${{ inputs.api_base_url }}|g" "$TEMPLATE" > "$TARGET"
+          else
+            echo "window.__API_BASE__='${{ inputs.api_base_url }}';" > "$TARGET"
+          fi
+          tail -n +1 "$TARGET"
 
       - name: Build (example npm)
         working-directory: ${{ env.APP_LOCATION }}
@@ -53,7 +70,7 @@ jobs:
       - name: Deploy to Azure Static Web Apps
         uses: azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          azure_static_web_apps_api_token: ${{ inputs.swa_deploy_token }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
           app_location: ${{ env.APP_LOCATION }}

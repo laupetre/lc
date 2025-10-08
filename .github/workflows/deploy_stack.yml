@@ -5,7 +5,6 @@ on:
   push:
     branches: [ main ]
 
-# One lock for the whole E2E deploy (prevents overlapping full-stack runs)
 concurrency:
   group: fullstack-${{ github.ref }}
   cancel-in-progress: true
@@ -16,18 +15,19 @@ jobs:
     uses: ./.github/workflows/infra_apply.yml
     with:
       tf_dir: infra
-    secrets: inherit              # <-- important: pass repo secrets to child
+    secrets: inherit
 
   api:
     name: Deploy API
     needs: infra
     uses: ./.github/workflows/api_deploy.yml
-    secrets: inherit              # keep passing to API child
+    secrets: inherit
 
   swa:
     name: Deploy SWA
     needs: [infra, api]
     uses: ./.github/workflows/swa_deploy.yml
     with:
-      api_base_url: ${{ needs.infra.outputs.api_url }}
-    secrets: inherit              # keep passing to SWA child
+      api_base_url:   ${{ needs.infra.outputs.api_url }}
+      swa_deploy_token: ${{ needs.infra.outputs.swa_token }}   # <-- NEW
+    secrets: inherit
