@@ -33,9 +33,10 @@ variable "image_tag" {
   default = "latest"
 }
 
+# Seed image listens on 80
 variable "container_port" {
   type    = number
-  default = 8000
+  default = 80
 }
 
 variable "openai_model" {

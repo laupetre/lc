@@ -43,7 +43,7 @@ resource "azurerm_container_app" "api" {
 
   identity { type = "SystemAssigned" }
 
-  # Registry config retained for when the CI switches the image to ACR
+  # Registry config retained for when CI switches the image to ACR
   registry {
     server               = azurerm_container_registry.acr.login_server
     username             = azurerm_container_registry.acr.admin_username
@@ -65,7 +65,7 @@ resource "azurerm_container_app" "api" {
     container {
       name   = "api"
 
-      # Public seed image so app can be created before your ACR tag exists
+      # Public seed image so the app can be created before your ACR tag exists
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 
       cpu    = 0.5
