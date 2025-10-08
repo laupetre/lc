@@ -25,7 +25,7 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   LOCATION: eastus
-  # --- Remote state settings (change if you like) ---
+  # Remote state config
   TFSTATE_RG: tfstate-rg
   TFSTATE_SA: tfstate-${{ github.repository_owner }}-${{ github.event.repository.name }}
   TFSTATE_CONTAINER: tfstate
@@ -44,7 +44,7 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Export ARM_* so Terraform provider authenticates as the SP (not Azure CLI user)
+      # Export ARM_* so Terraform provider uses the SP (not CLI user)
       - name: Export ARM_* env for Terraform
         shell: bash
         run: |
@@ -63,13 +63,12 @@ jobs:
         with:
           terraform_version: 1.6.6
 
-      # --- Create state RG/SA, enable shared keys, fetch access key ---
+      # Create state RG/SA and fetch access key
       - name: Ensure tfstate backend (RG/SA) + fetch key
         shell: bash
         run: |
           set -euo pipefail
 
-          # normalize SA name (lowercase, alnum, <=24 chars)
           SA_RAW="${TFSTATE_SA,,}"
           SA_RAW="${SA_RAW//[^a-z0-9]/}"
           SA_TRUNC="${SA_RAW:0:24}"
@@ -87,18 +86,16 @@ jobs:
               --sku Standard_LRS --kind StorageV2 \
               --allow-shared-key-access true 1>/dev/null
           else
-            # ensure shared keys are enabled (if policy allows)
             az storage account update \
               -g "${TFSTATE_RG}" -n "${SA_TRUNC}" \
               --allow-shared-key-access true 1>/dev/null || true
           fi
 
-          # access key for the backend
           KEY=$(az storage account keys list -g "${TFSTATE_RG}" -n "${SA_TRUNC}" --query "[0].value" -o tsv)
           echo "::add-mask::$KEY"
           echo "ARM_ACCESS_KEY=$KEY" >> $GITHUB_ENV
 
-      # --- Ensure the CONTAINER exists (data-plane create + wait until visible) ---
+      # Ensure container exists (data-plane create + wait)
       - name: Ensure tfstate container exists (data-plane)
         shell: bash
         env:
@@ -108,7 +105,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "Verifying container '${CONTAINER}' in account '${ACCOUNT}'..."
-
           for i in {1..30}; do
             EXISTS=$(az storage container exists \
                        --account-name "$ACCOUNT" \
@@ -129,14 +125,12 @@ jobs:
             sleep 5
           done
 
-          # final check (fail if still not present)
           az storage container show \
             --account-name "$ACCOUNT" \
             --name "$CONTAINER" \
             --auth-mode key \
             --account-key "$KEY" 1>/dev/null
 
-      # --- Init with shared-key backend ---
       - name: Terraform init (shared-key backend)
         working-directory: ${{ inputs.tf_dir }}
         env:
@@ -151,9 +145,14 @@ jobs:
             -backend-config="key=${TFSTATE_KEY}" \
             -backend-config="access_key=${ARM_ACCESS_KEY}"
 
-      - name: Terraform fmt
+      # --- fmt: auto-fix then verify (prevents code 3 failure) ---
+      - name: Terraform fmt (auto-fix)
         working-directory: ${{ inputs.tf_dir }}
-        run: terraform fmt -check
+        run: terraform fmt -recursive
+
+      - name: Terraform fmt (verify)
+        working-directory: ${{ inputs.tf_dir }}
+        run: terraform fmt -recursive -check -diff
 
       - name: Terraform validate
         working-directory: ${{ inputs.tf_dir }}
