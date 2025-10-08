@@ -43,7 +43,7 @@ env:
   TFSTATE_CONTAINER: tfstate
   TFSTATE_KEY: prod.terraform.tfstate
 
-  # Must match infra/variables.tf defaults (or override via TF_VARs)
+  # Must match infra/variables.tf (or override via TF_VARs)
   RG_NAME: lc-swa-rg
   CONTAINERAPP_NAME: lc-swa-api
 
@@ -147,12 +147,13 @@ jobs:
             -backend-config="key=${TFSTATE_KEY}" \
             -backend-config="access_key=${ARM_ACCESS_KEY}"
 
-      # ---------- NEW: auto-import existing Resource Group ----------
+      # ---------- Import existing Resource Group if it's already in Azure ----------
       - name: Import existing Resource Group into state (if present)
         working-directory: ${{ inputs.tf_dir }}
         env:
           SUBSCRIPTION_ID: ${{ env.ARM_SUBSCRIPTION_ID }}
           RG:              ${{ env.RG_NAME }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}   # required var
         run: |
           set -euo pipefail
           if az group show -n "$RG" >/dev/null 2>&1; then
@@ -161,9 +162,9 @@ jobs:
               terraform import -input=false azurerm_resource_group.rg "$ID"
             fi
           fi
-      # --------------------------------------------------------------
+      # ---------------------------------------------------------------------------
 
-      # We already import the Container App if it exists
+      # ---------- Import Container App if it already exists ----------
       - name: Import existing Container App into state (if present)
         working-directory: ${{ inputs.tf_dir }}
         env:
@@ -179,6 +180,7 @@ jobs:
               terraform import -input=false azurerm_container_app.api "$ID"
             fi
           fi
+      # -----------------------------------------------------------------
 
       - name: Terraform fmt (auto-fix)
         working-directory: ${{ inputs.tf_dir }}
