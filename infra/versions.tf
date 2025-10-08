@@ -12,7 +12,7 @@ terraform {
     }
   }
 
-  # Backend is configured by the workflow via -backend-config flags.
+  # Backend details are passed from the workflow via -backend-config
   backend "azurerm" {}
 }
 

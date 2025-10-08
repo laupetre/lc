@@ -1,5 +1,5 @@
 ############################################
-# Resource Group, LA Workspace, Container Apps Env
+# Resource Group, Log Analytics, Container Apps Env
 ############################################
 resource "azurerm_resource_group" "rg" {
   name     = var.resource_group_name
@@ -39,18 +39,18 @@ resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
   resource_group_name          = azurerm_resource_group.rg.name
   container_app_environment_id = azurerm_container_app_environment.env.id
-  revision_mode                = "Single" # or "Multiple"
+  revision_mode                = "Single"
 
   identity { type = "SystemAssigned" }
 
-  # Registry using ACR admin creds (quick start)
+  # Registry auth using ACR admin creds
   registry {
     server               = azurerm_container_registry.acr.login_server
     username             = azurerm_container_registry.acr.admin_username
     password_secret_name = "acr-pwd"
   }
 
-  # ---- Secrets live at the top level
+  # Secrets live at top level
   secret {
     name  = "acr-pwd"
     value = azurerm_container_registry.acr.admin_password
@@ -61,7 +61,6 @@ resource "azurerm_container_app" "api" {
     value = var.openai_api_key
   }
 
-  # ---- Pod template
   template {
     container {
       name   = "api"
@@ -69,16 +68,22 @@ resource "azurerm_container_app" "api" {
       cpu    = 0.5
       memory = "1Gi"
 
-      env { name = "OPENAI_MODEL"   value       = var.openai_model }
-      env { name = "OPENAI_API_KEY" secret_name = "openai-key"     }
+      env {
+        name  = "OPENAI_MODEL"
+        value = var.openai_model
+      }
+
+      env {
+        name        = "OPENAI_API_KEY"
+        secret_name = "openai-key"
+      }
     }
 
-    # use these; there is no separate 'scale' block
+    # (replace old 'scale' block)
     min_replicas = 1
     max_replicas = 2
   }
 
-  # ---- Ingress requires at least one traffic_weight
   ingress {
     external_enabled = true
     target_port      = var.container_port
