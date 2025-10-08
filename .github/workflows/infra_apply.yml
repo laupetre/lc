@@ -25,6 +25,7 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   LOCATION: eastus
+  # --- Remote state settings (change if you like) ---
   TFSTATE_RG: tfstate-rg
   TFSTATE_SA: tfstate-${{ github.repository_owner }}-${{ github.event.repository.name }}
   TFSTATE_CONTAINER: tfstate
@@ -33,16 +34,17 @@ env:
 jobs:
   plan-apply:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      # Login with Service Principal JSON
+      # Login with Service Principal JSON (repo secret: AZURE_CREDENTIALS)
       - name: Azure login (Service Principal JSON)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Export ARM_* so Terraform provider uses SP auth
+      # Export ARM_* so Terraform provider authenticates as the SP (not Azure CLI user)
       - name: Export ARM_* env for Terraform
         shell: bash
         run: |
@@ -61,36 +63,86 @@ jobs:
         with:
           terraform_version: 1.6.6
 
-      # Create state RG/SA/container and fetch the access key (shared-key backend)
-      - name: Ensure tfstate backend (RG/SA/Container) + fetch key
+      # --- Create state RG/SA, enable shared keys, fetch access key ---
+      - name: Ensure tfstate backend (RG/SA) + fetch key
         shell: bash
         run: |
           set -euo pipefail
-          SA_RAW="${TFSTATE_SA,,}"; SA_RAW="${SA_RAW//[^a-z0-9]/}"; SA_TRUNC="${SA_RAW:0:23}"
+
+          # normalize SA name (lowercase, alnum, <=24 chars)
+          SA_RAW="${TFSTATE_SA,,}"
+          SA_RAW="${SA_RAW//[^a-z0-9]/}"
+          SA_TRUNC="${SA_RAW:0:24}"
           echo "SANITIZED_SA=${SA_TRUNC}" >> $GITHUB_ENV
 
+          echo "Remote state account  : ${SA_TRUNC}"
+          echo "Remote state container: ${TFSTATE_CONTAINER}"
+          echo "Remote state key      : ${TFSTATE_KEY}"
+
           az group create -n "${TFSTATE_RG}" -l "${LOCATION}" 1>/dev/null
+
           if ! az storage account show -g "${TFSTATE_RG}" -n "${SA_TRUNC}" >/dev/null 2>&1; then
             az storage account create \
               -g "${TFSTATE_RG}" -n "${SA_TRUNC}" -l "${LOCATION}" \
               --sku Standard_LRS --kind StorageV2 \
               --allow-shared-key-access true 1>/dev/null
+          else
+            # ensure shared keys are enabled (if policy allows)
+            az storage account update \
+              -g "${TFSTATE_RG}" -n "${SA_TRUNC}" \
+              --allow-shared-key-access true 1>/dev/null || true
           fi
 
-          # Create container (management plane)
-          az storage container-rm create \
-            -g "${TFSTATE_RG}" -a "${SA_TRUNC}" -n "${TFSTATE_CONTAINER}" 1>/dev/null || true
-
-          # Get access key (shared key backend)
+          # access key for the backend
           KEY=$(az storage account keys list -g "${TFSTATE_RG}" -n "${SA_TRUNC}" --query "[0].value" -o tsv)
           echo "::add-mask::$KEY"
           echo "ARM_ACCESS_KEY=$KEY" >> $GITHUB_ENV
 
+      # --- Ensure the CONTAINER exists (data-plane create + wait until visible) ---
+      - name: Ensure tfstate container exists (data-plane)
+        shell: bash
+        env:
+          ACCOUNT:   ${{ env.SANITIZED_SA }}
+          CONTAINER: ${{ env.TFSTATE_CONTAINER }}
+          KEY:       ${{ env.ARM_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          echo "Verifying container '${CONTAINER}' in account '${ACCOUNT}'..."
+
+          for i in {1..30}; do
+            EXISTS=$(az storage container exists \
+                       --account-name "$ACCOUNT" \
+                       --name "$CONTAINER" \
+                       --auth-mode key \
+                       --account-key "$KEY" \
+                       --query exists -o tsv 2>/dev/null || echo false)
+            if [ "$EXISTS" = "true" ]; then
+              echo "Container exists."
+              break
+            fi
+            echo "Creating container and waiting (attempt $i)..."
+            az storage container create \
+              --account-name "$ACCOUNT" \
+              --name "$CONTAINER" \
+              --auth-mode key \
+              --account-key "$KEY" 1>/dev/null || true
+            sleep 5
+          done
+
+          # final check (fail if still not present)
+          az storage container show \
+            --account-name "$ACCOUNT" \
+            --name "$CONTAINER" \
+            --auth-mode key \
+            --account-key "$KEY" 1>/dev/null
+
+      # --- Init with shared-key backend ---
       - name: Terraform init (shared-key backend)
         working-directory: ${{ inputs.tf_dir }}
         env:
           ARM_ACCESS_KEY: ${{ env.ARM_ACCESS_KEY }}
         run: |
+          echo "terraform init -> SA='${SANITIZED_SA}', container='${TFSTATE_CONTAINER}', key='${TFSTATE_KEY}'"
           terraform init \
             -input=false \
             -backend-config="resource_group_name=${TFSTATE_RG}" \
