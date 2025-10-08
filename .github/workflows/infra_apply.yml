@@ -31,6 +31,10 @@ env:
   TFSTATE_CONTAINER: tfstate
   TFSTATE_KEY: prod.terraform.tfstate
 
+  # Names used for pre-import (match your variables.tf defaults)
+  RG_NAME: lc-swa-rg
+  CONTAINERAPP_NAME: lc-swa-api
+
 jobs:
   plan-apply:
     runs-on: ubuntu-latest
@@ -38,13 +42,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Login with Service Principal JSON (repo secret: AZURE_CREDENTIALS)
       - name: Azure login (Service Principal JSON)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Export ARM_* so Terraform provider uses the SP (not CLI user)
+      # Export ARM_* so Terraform provider uses the SP
       - name: Export ARM_* env for Terraform
         shell: bash
         run: |
@@ -95,7 +98,6 @@ jobs:
           echo "::add-mask::$KEY"
           echo "ARM_ACCESS_KEY=$KEY" >> $GITHUB_ENV
 
-      # Ensure container exists (data-plane create + wait)
       - name: Ensure tfstate container exists (data-plane)
         shell: bash
         env:
@@ -104,7 +106,6 @@ jobs:
           KEY:       ${{ env.ARM_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          echo "Verifying container '${CONTAINER}' in account '${ACCOUNT}'..."
           for i in {1..30}; do
             EXISTS=$(az storage container exists \
                        --account-name "$ACCOUNT" \
@@ -112,11 +113,7 @@ jobs:
                        --auth-mode key \
                        --account-key "$KEY" \
                        --query exists -o tsv 2>/dev/null || echo false)
-            if [ "$EXISTS" = "true" ]; then
-              echo "Container exists."
-              break
-            fi
-            echo "Creating container and waiting (attempt $i)..."
+            if [ "$EXISTS" = "true" ]; then break; fi
             az storage container create \
               --account-name "$ACCOUNT" \
               --name "$CONTAINER" \
@@ -124,7 +121,6 @@ jobs:
               --account-key "$KEY" 1>/dev/null || true
             sleep 5
           done
-
           az storage container show \
             --account-name "$ACCOUNT" \
             --name "$CONTAINER" \
@@ -145,7 +141,28 @@ jobs:
             -backend-config="key=${TFSTATE_KEY}" \
             -backend-config="access_key=${ARM_ACCESS_KEY}"
 
-      # --- fmt: auto-fix then verify (prevents code 3 failure) ---
+      # ---------- NEW: auto-import Container App if it already exists ----------
+      - name: Import existing Container App into state (if present)
+        working-directory: ${{ inputs.tf_dir }}
+        env:
+          SUBSCRIPTION_ID: ${{ env.ARM_SUBSCRIPTION_ID }}
+          RG: ${{ env.RG_NAME }}
+          APP: ${{ env.CONTAINERAPP_NAME }}
+        run: |
+          set -euo pipefail
+          if az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+            if ! terraform state list | grep -q '^azurerm_container_app\.api$'; then
+              ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${APP}"
+              echo "Importing existing Container App: $ID"
+              terraform import azurerm_container_app.api "$ID"
+            else
+              echo "Container App already tracked in state."
+            fi
+          else
+            echo "No existing Container App found; Terraform will create it."
+          fi
+      # ------------------------------------------------------------------------
+
       - name: Terraform fmt (auto-fix)
         working-directory: ${{ inputs.tf_dir }}
         run: terraform fmt -recursive
