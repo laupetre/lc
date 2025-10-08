@@ -7,6 +7,14 @@ on:
         required: false
         type: string
         default: "infra"
+    outputs:
+      api_url:
+        description: "Public URL of the Container App"
+        value: ${{ jobs.plan-apply.outputs.api_url }}
+      api_hostname:
+        description: "FQDN of the Container App"
+        value: ${{ jobs.plan-apply.outputs.api_hostname }}
+
   workflow_dispatch:
     inputs:
       tf_dir:
@@ -15,12 +23,13 @@ on:
         default: "infra"
         type: string
 
+# IMPORTANT: group differs from parent to avoid deadlock
+concurrency:
+  group: infra-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
-
-concurrency:
-  group: terraform-${{ github.ref }}
-  cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: "true"
@@ -32,7 +41,7 @@ env:
   TFSTATE_CONTAINER: tfstate
   TFSTATE_KEY: prod.terraform.tfstate
 
-  # Names used for pre-import (must match variables.tf defaults or your overrides)
+  # Names used for pre-import (match variables.tf defaults or your overrides)
   RG_NAME: lc-swa-rg
   CONTAINERAPP_NAME: lc-swa-api
 
@@ -40,6 +49,11 @@ jobs:
   plan-apply:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+
+    # Expose job-level outputs back to the caller
+    outputs:
+      api_url: ${{ steps.expose.outputs.api_url }}
+      api_hostname: ${{ steps.expose.outputs.api_hostname }}
 
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +63,6 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Export ARM_* so Terraform provider uses the SP
       - name: Export ARM_* env for Terraform
         shell: bash
         run: |
@@ -68,7 +81,6 @@ jobs:
         with:
           terraform_version: 1.6.6
 
-      # Create state RG/SA and fetch access key
       - name: Ensure tfstate backend (RG/SA) + fetch key
         shell: bash
         run: |
@@ -78,10 +90,6 @@ jobs:
           SA_RAW="${SA_RAW//[^a-z0-9]/}"
           SA_TRUNC="${SA_RAW:0:24}"
           echo "SANITIZED_SA=${SA_TRUNC}" >> $GITHUB_ENV
-
-          echo "Remote state account  : ${SA_TRUNC}"
-          echo "Remote state container: ${TFSTATE_CONTAINER}"
-          echo "Remote state key      : ${TFSTATE_KEY}"
 
           az group create -n "${TFSTATE_RG}" -l "${LOCATION}" 1>/dev/null
 
@@ -100,7 +108,6 @@ jobs:
           echo "::add-mask::$KEY"
           echo "ARM_ACCESS_KEY=$KEY" >> $GITHUB_ENV
 
-      # Ensure state container exists (data-plane) and wait until visible
       - name: Ensure tfstate container exists (data-plane)
         shell: bash
         env:
@@ -124,18 +131,12 @@ jobs:
               --account-key "$KEY" 1>/dev/null || true
             sleep 5
           done
-          az storage container show \
-            --account-name "$ACCOUNT" \
-            --name "$CONTAINER" \
-            --auth-mode key \
-            --account-key "$KEY" 1>/dev/null
 
       - name: Terraform init (shared-key backend)
         working-directory: ${{ inputs.tf_dir }}
         env:
           ARM_ACCESS_KEY: ${{ env.ARM_ACCESS_KEY }}
         run: |
-          echo "terraform init -> SA='${SANITIZED_SA}', container='${TFSTATE_CONTAINER}', key='${TFSTATE_KEY}'"
           terraform init \
             -input=false \
             -backend-config="resource_group_name=${TFSTATE_RG}" \
@@ -144,7 +145,7 @@ jobs:
             -backend-config="key=${TFSTATE_KEY}" \
             -backend-config="access_key=${ARM_ACCESS_KEY}"
 
-      # ---------- Import fix: pass TF_VAR_openai_api_key so import isn't interactive ----------
+      # Import fix: pass TF_VAR_openai_api_key so import isn't interactive
       - name: Import existing Container App into state (if present)
         working-directory: ${{ inputs.tf_dir }}
         env:
@@ -157,15 +158,9 @@ jobs:
           if az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             if ! terraform state list | grep -q '^azurerm_container_app\.api$'; then
               ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${APP}"
-              echo "Importing existing Container App: $ID"
               terraform import -input=false azurerm_container_app.api "$ID"
-            else
-              echo "Container App already tracked in state."
             fi
-          else
-            echo "No existing Container App found; Terraform will create it."
           fi
-      # ---------------------------------------------------------------------------------------
 
       - name: Terraform fmt (auto-fix)
         working-directory: ${{ inputs.tf_dir }}
@@ -193,7 +188,9 @@ jobs:
           TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: terraform apply -input=false -auto-approve tfplan
 
-      - name: Outputs
-        if: github.ref == 'refs/heads/main'
+      - name: Expose infra outputs to caller
+        id: expose
         working-directory: ${{ inputs.tf_dir }}
-        run: terraform output -json | jq .
+        run: |
+          echo "api_url=$(terraform output -raw api_url)" >> $GITHUB_OUTPUT
+          echo "api_hostname=$(terraform output -raw api_hostname)" >> $GITHUB_OUTPUT

@@ -1,117 +1,63 @@
-name: Deploy Static Web App (frontend)
+name: Deploy SWA
 
 on:
   workflow_call:
     inputs:
-      api_url:
-        required: false
+      api_base_url:
+        description: "API base URL to inject into the web app"
+        required: true
         type: string
-        default: ""
-      cleanup:
-        required: false
-        type: string
-        default: "none"      # none | previews_all
   workflow_dispatch:
     inputs:
-      api_url:
-        description: "Override API base URL (optional)"
-        required: false
-        default: ""
+      api_base_url:
+        description: "API base URL to inject into the web app"
+        required: true
         type: string
-      cleanup:
-        description: "none | previews_all"
-        required: false
-        default: "none"
-        type: choice
-        options: [none, previews_all]
+
+# Different group from parent to avoid deadlock
+concurrency:
+  group: swa-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: prod-deploy-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
-  AZURE_RESOURCE_GROUP: lc-swa-rg
-  CONTAINERAPP_NAME:   lc-swa-api
-  SWA_NAME:            lc-swa-web
+  APP_LOCATION: web
+  OUTPUT_LOCATION: dist
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login (Service Principal JSON)
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Ensure CLI extensions
+      # Optional: inject API URL into a config file used by your SPA
+      - name: Inject API URL into web/config.js
         run: |
-          az extension add --name containerapp --upgrade
-          az extension add --name staticwebapp --upgrade || true
+          mkdir -p $APP_LOCATION
+          # If you already have a template, adjust the sed accordingly. Here we create/update a simple config.
+          echo "window.__API_BASE__ = '${{ inputs.api_base_url }}';" > $APP_LOCATION/config.js
+          cat $APP_LOCATION/config.js
 
-      - name: Optional cleanup (preview envs)
-        if: ${{ inputs.cleanup == 'previews_all' }}
+      - name: Build (example npm)
+        working-directory: ${{ env.APP_LOCATION }}
         run: |
-          if ! az staticwebapp show -n "$SWA_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
-            echo "::warning::SWA '$SWA_NAME' not found; skip cleanup."
-            exit 0
-          fi
-          mapfile -t PREVIEW_ENVS < <(az staticwebapp environment list -n "$SWA_NAME" -g "$AZURE_RESOURCE_GROUP" --query "[?name!='default'].name" -o tsv 2>/dev/null || echo "")
-          for env in "${PREVIEW_ENVS[@]}"; do
-            [ -n "$env" ] || continue
-            az staticwebapp environment delete -n "$SWA_NAME" -g "$AZURE_RESOURCE_GROUP" --environment-name "$env" --yes || true
-          done
-
-      - name: Resolve API URL
-        id: apiurl
-        env:
-          INPUT_API_URL: ${{ inputs.api_url }}
-          SECRET_API_URL: ${{ secrets.API_BASE_URL }}
-        run: |
-          API_URL="${INPUT_API_URL:-}"
-          if [ -z "$API_URL" ]; then
-            FQDN=$(az containerapp show -g "$AZURE_RESOURCE_GROUP" -n "$CONTAINERAPP_NAME" --query properties.configuration.ingress.fqdn -o tsv 2>/dev/null || true)
-            [ -n "$FQDN" ] && API_URL="https://${FQDN}"
-          fi
-          [ -z "$API_URL" ] && API_URL="${SECRET_API_URL:-}"
-          if [ -z "$API_URL" ]; then
-            echo "::error::Could not determine API URL (set inputs.api_url or secrets.API_BASE_URL)."
-            exit 1
-          fi
-          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
-          echo "Using $API_URL"
-
-      - name: Inject API URL into config.js
-        env:
-          API_URL: ${{ steps.apiurl.outputs.api_url }}
-        run: |
-          if [ -f web/config.template.js ]; then
-            sed "s#__API_BASE__#${API_URL}#g" web/config.template.js > web/config.js
+          if [ -f package.json ]; then
+            npm ci
+            npm run build
           else
-            mkdir -p web
-            echo "export const API_BASE_URL='${API_URL}';" > web/config.js
+            # No build system; just deploy raw web/ as static content
+            mkdir -p ../${OUTPUT_LOCATION}
+            cp -r . ../${OUTPUT_LOCATION}/
           fi
 
-      - name: Get SWA deployment token (live)
-        id: swatoken
-        run: |
-          TOK=$(az staticwebapp secrets list -n "$SWA_NAME" -g "$AZURE_RESOURCE_GROUP" --query properties.apiKey -o tsv)
-          if [ -z "$TOK" ]; then
-            echo "::error::Could not fetch SWA deployment token. Verify SWA_NAME and RG."
-            exit 1
-          fi
-          echo "::add-mask::$TOK"
-          echo "token=$TOK" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy SWA
-        uses: Azure/static-web-apps-deploy@v1
+      - name: Deploy to Azure Static Web Apps
+        uses: azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ steps.swatoken.outputs.token }}
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: upload
-          app_location: web
-          output_location: ""
+          action: "upload"
+          app_location: ${{ env.APP_LOCATION }}
+          output_location: ${{ env.OUTPUT_LOCATION }}

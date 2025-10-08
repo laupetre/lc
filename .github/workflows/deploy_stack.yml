@@ -1,66 +1,32 @@
 name: Deploy full stack (infra → api → swa)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
-    paths:
-      - 'infra/**'
-      - 'api/**'
-      - 'web/**'
-      - '.github/workflows/**'
-  workflow_dispatch:
-    inputs:
-      cleanup_api:
-        description: "API cleanup: none | revisions | full"
-        required: false
-        default: "none"
-        type: choice
-        options: [none, revisions, full]
-      keep:
-        description: "Keep N inactive API revisions (when cleanup!=none)"
-        required: false
-        default: "5"
-        type: string
-      cleanup_swa:
-        description: "SWA cleanup: none | previews_all"
-        required: false
-        default: "none"
-        type: choice
-        options: [none, previews_all]
-      tf_dir:
-        description: "Terraform folder"
-        required: false
-        default: "infra"
-        type: string
 
-permissions:
-  contents: read
-
+# One lock for the whole E2E deploy (prevents overlapping full-stack runs)
 concurrency:
-  group: prod-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  group: fullstack-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   infra:
-    name: Provision infra (Terraform)
+    name: Infra
     uses: ./.github/workflows/infra_apply.yml
     with:
-      tf_dir: ${{ inputs.tf_dir || 'infra' }}
-    secrets: inherit
+      tf_dir: infra
 
   api:
     name: Deploy API
     needs: infra
-    uses: ./.github/workflows/api_deployment.yml
-    with:
-      cleanup: ${{ inputs.cleanup_api || 'none' }}
-      keep:    ${{ inputs.keep || '5' }}
+    uses: ./.github/workflows/api_deploy.yml
     secrets: inherit
 
   swa:
     name: Deploy SWA
-    needs: api
+    needs: [infra, api]
     uses: ./.github/workflows/swa_deploy.yml
     with:
-      cleanup: ${{ inputs.cleanup_swa || 'none' }}
+      api_base_url: ${{ needs.infra.outputs.api_url }}
     secrets: inherit
