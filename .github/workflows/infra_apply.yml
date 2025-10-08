@@ -18,7 +18,6 @@ on:
         description: "SWA deployment token"
         value: ${{ jobs.plan-apply.outputs.swa_token }}
 
-  # keep this so you can run this workflow directly if needed
   workflow_dispatch:
     inputs:
       tf_dir:
@@ -27,7 +26,6 @@ on:
         default: "infra"
         type: string
 
-# Different group from parent to avoid deadlock
 concurrency:
   group: infra-${{ github.ref }}
   cancel-in-progress: false
@@ -149,7 +147,23 @@ jobs:
             -backend-config="key=${TFSTATE_KEY}" \
             -backend-config="access_key=${ARM_ACCESS_KEY}"
 
-      # Import fix: pass TF_VAR_openai_api_key so import isn't interactive
+      # ---------- NEW: auto-import existing Resource Group ----------
+      - name: Import existing Resource Group into state (if present)
+        working-directory: ${{ inputs.tf_dir }}
+        env:
+          SUBSCRIPTION_ID: ${{ env.ARM_SUBSCRIPTION_ID }}
+          RG:              ${{ env.RG_NAME }}
+        run: |
+          set -euo pipefail
+          if az group show -n "$RG" >/dev/null 2>&1; then
+            if ! terraform state list | grep -q '^azurerm_resource_group\.rg$'; then
+              ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}"
+              terraform import -input=false azurerm_resource_group.rg "$ID"
+            fi
+          fi
+      # --------------------------------------------------------------
+
+      # We already import the Container App if it exists
       - name: Import existing Container App into state (if present)
         working-directory: ${{ inputs.tf_dir }}
         env:
