@@ -101,7 +101,7 @@ jobs:
         run: |
           TOK=$(az staticwebapp secrets list -n "$SWA_NAME" -g "$AZURE_RESOURCE_GROUP" --query properties.apiKey -o tsv)
           if [ -z "$TOK" ]; then
-            echo "::error::Could not fetch SWA deployment token. Verify SWA_NAME and RG, or provide AZURE_SWA_TOKEN secret."
+            echo "::error::Could not fetch SWA deployment token. Verify SWA_NAME and RG."
             exit 1
           fi
           echo "::add-mask::$TOK"
