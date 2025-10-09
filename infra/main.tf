@@ -1,39 +1,49 @@
 ############################################
-# Resource Group, Log Analytics, Container Apps Env
+# Provider
+############################################
+provider "azurerm" {
+  features {}
+}
+
+############################################
+# Resource Group
 ############################################
 resource "azurerm_resource_group" "rg" {
   name     = var.resource_group_name
   location = var.location
 }
 
-resource "azurerm_log_analytics_workspace" "law" {
-  name                = "${var.resource_group_name}-law"
-  location            = azurerm_resource_group.rg.location
+############################################
+# ACR
+############################################
+resource "azurerm_container_registry" "acr" {
+  name                = var.acr_name
   resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku                 = "Basic"
+  admin_enabled       = true
+}
+
+############################################
+# Log Analytics & Container Apps Environment
+############################################
+resource "azurerm_log_analytics_workspace" "law" {
+  name                = "${azurerm_resource_group.rg.name}-law"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
   sku                 = "PerGB2018"
   retention_in_days   = 30
 }
 
 resource "azurerm_container_app_environment" "env" {
   name                       = var.containerapps_env_name
-  location                   = azurerm_resource_group.rg.location
   resource_group_name        = azurerm_resource_group.rg.name
+  location                   = azurerm_resource_group.rg.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
 }
 
 ############################################
-# ACR (admin enabled for simplicity)
-############################################
-resource "azurerm_container_registry" "acr" {
-  name                = var.acr_name
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  sku                 = "Basic"
-  admin_enabled       = true
-}
-
-############################################
-# Container App (API) — seeded with public image
+# Container App (API)
 ############################################
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
@@ -41,28 +51,20 @@ resource "azurerm_container_app" "api" {
   container_app_environment_id = azurerm_container_app_environment.env.id
   revision_mode                = "Single"
 
-  identity { type = "SystemAssigned" }
+  ingress {
+    external_enabled = true
+    target_port      = var.container_port
 
-  registry {
-    server               = azurerm_container_registry.acr.login_server
-    username             = azurerm_container_registry.acr.admin_username
-    password_secret_name = "acr-pwd"
-  }
-
-  secret {
-    name  = "acr-pwd"
-    value = azurerm_container_registry.acr.admin_password
-  }
-
-  secret {
-    name  = "openai-key"
-    value = var.openai_api_key
+    traffic_weight {
+      percentage       = 100
+      latest_revision  = true
+    }
   }
 
   template {
     container {
       name   = "api"
-      image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+      image  = "${azurerm_container_registry.acr.login_server}/${var.image_name}:${var.image_tag}"
       cpu    = 0.5
       memory = "1Gi"
 
@@ -77,39 +79,37 @@ resource "azurerm_container_app" "api" {
       }
     }
 
-    min_replicas = 1
-    max_replicas = 2
-  }
-
-  ingress {
-    external_enabled = true
-    target_port      = var.container_port
-
-    traffic_weight {
-      percentage      = 100
-      latest_revision = true
+    secret {
+      name  = "openai-key"
+      value = var.openai_api_key
     }
   }
+
+  registry {
+    server = azurerm_container_registry.acr.login_server
+  }
 }
 
 ############################################
-# --- NEW: Static Web App (classic) + listSecrets token
+# Static Web App (use the new resource)
 ############################################
-# Create Static Web App (no repo connection; we deploy with token)
-resource "azurerm_static_site" "swa" {
-  name                = var.swa_name
+# NOTE: Static Web Apps are not available in `eastus` – use one of:
+# westus2, centralus, eastus2, westeurope, eastasia
+resource "azurerm_static_web_app" "swa" {
+  name                = "lc-swa-web"
   resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
-  sku_tier            = "Free"
-  # Optional custom domains etc. can be added later
+  location            = var.swa_location
+
+  sku_tier = "Free"
+  sku_size = "Free"
 }
 
-# Query its secrets to get the deployment API token
+# Fetch deployment token for SWA (needed by GitHub Actions to deploy)
+# We call listSecrets on the static web app.
 resource "azapi_resource_action" "swa_secrets" {
-  type        = "Microsoft.Web/staticSites@2022-09-01"
-  resource_id = azurerm_static_site.swa.id
-  action      = "listSecrets"
-  method      = "POST"
-
+  type                   = "Microsoft.Web/staticSites@2022-03-01"
+  resource_id            = azurerm_static_web_app.swa.id
+  action                 = "listSecrets"
+  method                 = "POST"
   response_export_values = ["properties.apiKey"]
 }
