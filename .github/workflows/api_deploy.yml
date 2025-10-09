@@ -3,11 +3,12 @@ name: Deploy API
 on:
   workflow_call:
     inputs:
-      rg_name:              { type: string, required: true }
-      containerapp_name:    { type: string, required: true }
-      acr_name:             { type: string, required: true }
-      image_name:           { type: string, required: true, default: "lc-swa-api" }
-      context_dir:          { type: string, required: false, default: "api" }
+      rg_name:            { type: string, required: true }
+      containerapp_name:  { type: string, required: true }
+      # pass the full login server (e.g. lcacrio.azurecr.io) from infra
+      acr_login_server:   { type: string, required: true }
+      image_name:         { type: string, required: true, default: "lc-swa-api" }
+      context_dir:        { type: string, required: false, default: "api" }
   push:
     paths:
       - "api/**"
@@ -34,25 +35,33 @@ jobs:
 
       - name: Build & push API image to ACR
         env:
-          ACR_NAME:  ${{ inputs.acr_name }}
-          IMAGE:     ${{ inputs.image_name }}
-          CONTEXT:   ${{ inputs.context_dir }}
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}   # e.g. lcacrio.azurecr.io
+          IMAGE:            ${{ inputs.image_name }}
+          CONTEXT:          ${{ inputs.context_dir }}
         run: |
           set -euo pipefail
+
+          # Derive the bare registry name for 'az acr login'
+          ACR_NAME="${ACR_LOGIN_SERVER%%.*}"   # lcacrio.azurecr.io -> lcacrio
+
+          # Login to ACR
           az acr login --name "$ACR_NAME"
-          docker build -t $ACR_NAME.azurecr.io/$IMAGE:${{ github.sha }} -t $ACR_NAME.azurecr.io/$IMAGE:latest "$CONTEXT"
-          docker push  $ACR_NAME.azurecr.io/$IMAGE:${{ github.sha }}
-          docker push  $ACR_NAME.azurecr.io/$IMAGE:latest
+
+          # Build & push (use the full login server in the tag)
+          docker build -t $ACR_LOGIN_SERVER/$IMAGE:${{ github.sha }} \
+                       -t $ACR_LOGIN_SERVER/$IMAGE:latest "$CONTEXT"
+          docker push  $ACR_LOGIN_SERVER/$IMAGE:${{ github.sha }}
+          docker push  $ACR_LOGIN_SERVER/$IMAGE:latest
 
       - name: Update Container App image
         env:
-          RG:   ${{ inputs.rg_name }}
-          APP:  ${{ inputs.containerapp_name }}
-          ACR:  ${{ inputs.acr_name }}
-          IMG:  ${{ inputs.image_name }}
+          RG:               ${{ inputs.rg_name }}
+          APP:              ${{ inputs.containerapp_name }}
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
+          IMG:              ${{ inputs.image_name }}
         run: |
           set -euo pipefail
           az containerapp update \
             --name "$APP" \
             --resource-group "$RG" \
-            --image "$ACR.azurecr.io/$IMG:${{ github.sha }}"
+            --image "$ACR_LOGIN_SERVER/$IMG:${{ github.sha }}"

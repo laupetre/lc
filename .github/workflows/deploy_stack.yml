@@ -28,11 +28,12 @@ jobs:
     needs: infra
     uses: ./.github/workflows/api_deploy.yml
     with:
-      rg_name:           "lc-swa-rg"
-      containerapp_name: "lc-swa-api"
-      acr_name:          "lcacrio"
-      image_name:        "lc-swa-api"
-      context_dir:       "api"
+      rg_name:            "lc-swa-rg"
+      containerapp_name:  "lc-swa-api"
+      # pass the login server from infra outputs (e.g. lcacrio.azurecr.io)
+      acr_login_server:   ${{ needs.infra.outputs.acr_login_server }}
+      image_name:         "lc-swa-api"
+      context_dir:        "api"
     secrets: inherit
 
   swa:
