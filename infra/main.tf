@@ -1,9 +1,12 @@
 ############################################
-# Provider
+# Providers
 ############################################
 provider "azurerm" {
   features {}
 }
+
+# (optional) used to call listSecrets on the Static Web App
+provider "azapi" {}
 
 ############################################
 # Resource Group
@@ -14,7 +17,7 @@ resource "azurerm_resource_group" "rg" {
 }
 
 ############################################
-# ACR
+# Azure Container Registry (ACR)
 ############################################
 resource "azurerm_container_registry" "acr" {
   name                = var.acr_name
@@ -25,7 +28,7 @@ resource "azurerm_container_registry" "acr" {
 }
 
 ############################################
-# Log Analytics & Container Apps Environment
+# Log Analytics + Container Apps Environment
 ############################################
 resource "azurerm_log_analytics_workspace" "law" {
   name                = "${azurerm_resource_group.rg.name}-law"
@@ -51,16 +54,18 @@ resource "azurerm_container_app" "api" {
   container_app_environment_id = azurerm_container_app_environment.env.id
   revision_mode                = "Single"
 
+  # Public ingress
   ingress {
     external_enabled = true
     target_port      = var.container_port
 
     traffic_weight {
-      percentage       = 100
-      latest_revision  = true
+      percentage      = 100
+      latest_revision = true
     }
   }
 
+  # Template / container definition
   template {
     container {
       name   = "api"
@@ -73,28 +78,30 @@ resource "azurerm_container_app" "api" {
         value = var.openai_model
       }
 
+      # This references the top-level secret declared below
       env {
         name        = "OPENAI_API_KEY"
         secret_name = "openai-key"
       }
     }
-
-    secret {
-      name  = "openai-key"
-      value = var.openai_api_key
-    }
   }
 
+  # ACR registry reference (ACR admin is enabled above)
   registry {
     server = azurerm_container_registry.acr.login_server
+  }
+
+  # ✅ Top-level secret block (NOT inside template)
+  secret {
+    name  = "openai-key"
+    value = var.openai_api_key
   }
 }
 
 ############################################
-# Static Web App (use the new resource)
+# Static Web App (new resource, not deprecated)
+# Must be deployed in a supported region (e.g., eastus2)
 ############################################
-# NOTE: Static Web Apps are not available in `eastus` – use one of:
-# westus2, centralus, eastus2, westeurope, eastasia
 resource "azurerm_static_web_app" "swa" {
   name                = "lc-swa-web"
   resource_group_name = azurerm_resource_group.rg.name
@@ -104,8 +111,7 @@ resource "azurerm_static_web_app" "swa" {
   sku_size = "Free"
 }
 
-# Fetch deployment token for SWA (needed by GitHub Actions to deploy)
-# We call listSecrets on the static web app.
+# Retrieve the deployment token for SWA (used by GitHub Actions)
 resource "azapi_resource_action" "swa_secrets" {
   type                   = "Microsoft.Web/staticSites@2022-03-01"
   resource_id            = azurerm_static_web_app.swa.id
