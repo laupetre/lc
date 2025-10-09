@@ -205,9 +205,22 @@ jobs:
         id: expose
         working-directory: ${{ inputs.tf_dir }}
         run: |
-          echo "api_url=$(terraform output -raw api_url)" >> $GITHUB_OUTPUT
-          echo "api_hostname=$(terraform output -raw api_hostname)" >> $GITHUB_OUTPUT
-          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
-          SWA_TOKEN=$(terraform output -raw swa_token)
-          echo "::add-mask::$SWA_TOKEN"
-          echo "swa_token=$SWA_TOKEN" >> $GITHUB_OUTPUT
+          set -euo pipefail
+
+          # Get all outputs in one go and parse with jq (no debug noise)
+          OUT_JSON="$(terraform output -json)"
+
+          api_url="$(jq -r '.api_url.value' <<<"$OUT_JSON")"
+          api_hostname="$(jq -r '.api_hostname.value' <<<"$OUT_JSON")"
+          acr_login_server="$(jq -r '.acr_login_server.value' <<<"$OUT_JSON")"
+          swa_token="$(jq -r '.swa_token.value' <<<"$OUT_JSON")"
+
+          # Mask sensitive token in logs
+          echo "::add-mask::$swa_token"
+
+          {
+            echo "api_url=$api_url"
+            echo "api_hostname=$api_hostname"
+            echo "acr_login_server=$acr_login_server"
+            echo "swa_token=$swa_token"
+          } >> "$GITHUB_OUTPUT"
