@@ -1,60 +1,87 @@
-name: Provision Azure infra (Terraform)
+name: Apply Infra (Terraform)
 
 on:
   workflow_call:
     inputs:
       tf_dir:
-        required: false
+        description: Path to Terraform code
         type: string
-        default: "infra"
+        required: false
+        default: infra
+      location:
+        description: Azure location for infra and tfstate
+        type: string
+        required: false
+        default: eastus
+      # Remote state (shared key)
+      tfstate_rg:
+        description: Resource group for tfstate storage account
+        type: string
+        required: false
+        default: tfstate-rg
+      tfstate_sa:
+        description: Storage account name for tfstate
+        type: string
+        required: false
+        default: tfstatelaupetrelc
+      tfstate_container:
+        description: Blob container for tfstate
+        type: string
+        required: false
+        default: tfstate
+      tfstate_key:
+        description: Blob key (file name) for tfstate
+        type: string
+        required: false
+        default: prod.terraform.tfstate
+      # Managed resource names (used by the auto-import step)
+      rg_name:
+        description: Resource group containing the infra
+        type: string
+        required: false
+        default: lc-swa-rg
+      acr_name:
+        description: Azure Container Registry name
+        type: string
+        required: false
+        default: lcacrio
+      law_name:
+        description: Log Analytics Workspace name
+        type: string
+        required: false
+        default: lc-swa-rg-law
+      swa_name:
+        description: Static Web App name
+        type: string
+        required: false
+        default: lc-swa-web
     outputs:
       api_url:
-        value: ${{ jobs.plan-apply.outputs.api_url }}
+        value: ${{ jobs.apply.outputs.api_url }}
       api_hostname:
-        value: ${{ jobs.plan-apply.outputs.api_hostname }}
-      swa_token:
-        value: ${{ jobs.plan-apply.outputs.swa_token }}
+        value: ${{ jobs.apply.outputs.api_hostname }}
       acr_login_server:
-        value: ${{ jobs.plan-apply.outputs.acr_login_server }}
-  workflow_dispatch:
-    inputs:
-      tf_dir:
-        required: false
-        default: "infra"
-        type: string
-
-concurrency:
-  group: infra-${{ github.ref }}
-  cancel-in-progress: false
+        value: ${{ jobs.apply.outputs.acr_login_server }}
+      swa_token:
+        value: ${{ jobs.apply.outputs.swa_token }}
 
 permissions:
   contents: read
 
-env:
-  TF_IN_AUTOMATION: "true"
-  LOCATION: eastus
-
-  # Remote state config
-  TFSTATE_RG: tfstate-rg
-  TFSTATE_SA: tfstate${{ github.repository_owner }}${{ github.event.repository.name }}
-  TFSTATE_CONTAINER: tfstate
-  TFSTATE_KEY: prod.terraform.tfstate
-
-  # Must match variables.tf
-  RG_NAME: lc-swa-rg
-  CONTAINERAPP_NAME: lc-swa-api
-
 jobs:
-  plan-apply:
-    name: Terraform plan & apply
+  apply:
+    name: Terraform apply
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     outputs:
-      api_url: ${{ steps.expose.outputs.api_url }}
-      api_hostname: ${{ steps.expose.outputs.api_hostname }}
-      swa_token: ${{ steps.expose.outputs.swa_token }}
+      api_url:          ${{ steps.expose.outputs.api_url }}
+      api_hostname:     ${{ steps.expose.outputs.api_hostname }}
       acr_login_server: ${{ steps.expose.outputs.acr_login_server }}
+      swa_token:        ${{ steps.expose.outputs.swa_token }}
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_INPUT: 0
 
     steps:
       - uses: actions/checkout@v4
@@ -64,141 +91,104 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Export ARM_* env for Terraform
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat > sp.json <<'JSON'
-          ${{ secrets.AZURE_CREDENTIALS }}
-          JSON
-          echo "ARM_CLIENT_ID=$(jq -r '.clientId' sp.json)"             >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=$(jq -r '.clientSecret' sp.json)"     >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=$(jq -r '.tenantId' sp.json)"             >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)" >> $GITHUB_ENV
-          echo "::add-mask::$(jq -r '.clientSecret' sp.json)"
-
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
+        uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.6.6
+          terraform_version: 1.7.5
 
       - name: Ensure tfstate backend (RG/SA) + fetch key
-        shell: bash
+        id: backend
         run: |
           set -euo pipefail
-          SA_RAW="${TFSTATE_SA,,}"; SA_RAW="${SA_RAW//[^a-z0-9]/}"
-          SA_TRUNC="${SA_RAW:0:24}"
-          echo "SANITIZED_SA=${SA_TRUNC}" >> $GITHUB_ENV
+          RG="${{ inputs.tfstate_rg }}"
+          SA="${{ inputs.tfstate_sa }}"
+          CONTAINER="${{ inputs.tfstate_container }}"
+          LOC="${{ inputs.location }}"
 
-          az group create -n "${TFSTATE_RG}" -l "${LOCATION}" 1>/dev/null
+          az group create -n "$RG" -l "$LOC" >/dev/null
 
-          if ! az storage account show -g "${TFSTATE_RG}" -n "${SA_TRUNC}" >/dev/null 2>&1; then
+          if ! az storage account show -g "$RG" -n "$SA" >/dev/null 2>&1; then
             az storage account create \
-              -g "${TFSTATE_RG}" -n "${SA_TRUNC}" -l "${LOCATION}" \
-              --sku Standard_LRS --kind StorageV2 \
-              --allow-shared-key-access true 1>/dev/null
-          else
-            az storage account update \
-              -g "${TFSTATE_RG}" -n "${SA_TRUNC}" \
-              --allow-shared-key-access true 1>/dev/null || true
+              -g "$RG" -n "$SA" -l "$LOC" \
+              --sku Standard_LRS \
+              --kind StorageV2 \
+              --https-only true \
+              >/dev/null
           fi
 
-          KEY=$(az storage account keys list -g "${TFSTATE_RG}" -n "${SA_TRUNC}" --query "[0].value" -o tsv)
+          KEY="$(az storage account keys list -g "$RG" -n "$SA" --query '[0].value' -o tsv)"
           echo "::add-mask::$KEY"
-          echo "ARM_ACCESS_KEY=$KEY" >> $GITHUB_ENV
+          echo "sa_key=$KEY" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure tfstate container exists (data-plane)
+          az storage container create \
+            --name "$CONTAINER" \
+            --account-name "$SA" \
+            --account-key "$KEY" \
+            >/dev/null
         shell: bash
-        env:
-          ACCOUNT:   ${{ env.SANITIZED_SA }}
-          CONTAINER: ${{ env.TFSTATE_CONTAINER }}
-          KEY:       ${{ env.ARM_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          for _ in {1..30}; do
-            EXISTS=$(az storage container exists \
-                       --account-name "$ACCOUNT" \
-                       --name "$CONTAINER" \
-                       --auth-mode key \
-                       --account-key "$KEY" \
-                       --query exists -o tsv 2>/dev/null || echo false)
-            if [ "$EXISTS" = "true" ]; then break; fi
-            az storage container create \
-              --account-name "$ACCOUNT" \
-              --name "$CONTAINER" \
-              --auth-mode key \
-              --account-key "$KEY" 1>/dev/null || true
-            sleep 5
-          done
 
       - name: Terraform init (shared-key backend)
         working-directory: ${{ inputs.tf_dir }}
-        env:
-          ARM_ACCESS_KEY: ${{ env.ARM_ACCESS_KEY }}
-        run: |
-          terraform init \
-            -input=false \
-            -backend-config="resource_group_name=${TFSTATE_RG}" \
-            -backend-config="storage_account_name=${SANITIZED_SA}" \
-            -backend-config="container_name=${TFSTATE_CONTAINER}" \
-            -backend-config="key=${TFSTATE_KEY}" \
-            -backend-config="access_key=${ARM_ACCESS_KEY}"
-
-      - name: Import existing Resource Group into state (if present)
-        working-directory: ${{ inputs.tf_dir }}
-        env:
-          SUBSCRIPTION_ID: ${{ env.ARM_SUBSCRIPTION_ID }}
-          RG:              ${{ env.RG_NAME }}
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
-          if az group show -n "$RG" >/dev/null 2>&1; then
-            if ! terraform state list | grep -q '^azurerm_resource_group\.rg$'; then
-              ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}"
-              terraform import -input=false azurerm_resource_group.rg "$ID"
-            fi
-          fi
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ inputs.tfstate_rg }}" \
+            -backend-config="storage_account_name=${{ inputs.tfstate_sa }}" \
+            -backend-config="container_name=${{ inputs.tfstate_container }}" \
+            -backend-config="key=${{ inputs.tfstate_key }}" \
+            -backend-config="access_key=${{ steps.backend.outputs.sa_key }}"
+        shell: bash
 
-      - name: Import existing Container App into state (if present)
+      - name: Terraform fmt
         working-directory: ${{ inputs.tf_dir }}
-        env:
-          SUBSCRIPTION_ID: ${{ env.ARM_SUBSCRIPTION_ID }}
-          RG:              ${{ env.RG_NAME }}
-          APP:             ${{ env.CONTAINERAPP_NAME }}
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-          if az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            if ! terraform state list | grep -q '^azurerm_container_app\.api$'; then
-              ID="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${APP}"
-              terraform import -input=false azurerm_container_app.api "$ID"
-            fi
-          fi
-
-      - name: Terraform fmt (auto-fix)
-        working-directory: ${{ inputs.tf_dir }}
-        run: terraform fmt -recursive
-
-      - name: Terraform fmt (verify)
-        working-directory: ${{ inputs.tf_dir }}
-        run: terraform fmt -recursive -check -diff
+        run: terraform fmt -check
 
       - name: Terraform validate
         working-directory: ${{ inputs.tf_dir }}
         run: terraform validate
 
+      # 👉 NEW: auto-import resources if they already exist in Azure but not in state
+      - name: Import existing resources into state (idempotent)
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          set -euo pipefail
+
+          SUB_ID="$(az account show --query id -o tsv)"
+          RG="${{ inputs.rg_name }}"
+          ACR_NAME="${{ inputs.acr_name }}"
+          LAW_NAME="${{ inputs.law_name }}"
+          SWA_NAME="${{ inputs.swa_name }}"
+
+          import_if_missing() {
+            local addr="$1"
+            local id="$2"
+            if terraform state show "$addr" >/dev/null 2>&1; then
+              echo "State already contains $addr"
+            else
+              echo "Importing $addr -> $id"
+              terraform import "$addr" "$id"
+            fi
+          }
+
+          import_if_missing \
+            azurerm_container_registry.acr \
+            "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
+
+          import_if_missing \
+            azurerm_log_analytics_workspace.law \
+            "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.OperationalInsights/workspaces/${LAW_NAME}"
+
+          import_if_missing \
+            azurerm_static_web_app.swa \
+            "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.Web/staticSites/${SWA_NAME}"
+
       - name: Terraform plan
         id: plan
         working-directory: ${{ inputs.tf_dir }}
-        env:
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
-        run: terraform plan -input=false -out=tfplan
+        run: terraform plan -input=false -out tfplan
 
       - name: Terraform apply
-        if: github.ref == 'refs/heads/main'
         working-directory: ${{ inputs.tf_dir }}
-        env:
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: terraform apply -input=false -auto-approve tfplan
 
       - name: Expose infra outputs to caller
@@ -206,8 +196,6 @@ jobs:
         working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
-
-          # Get all outputs in one go and parse with jq (no debug noise)
           OUT_JSON="$(terraform output -json)"
 
           api_url="$(jq -r '.api_url.value' <<<"$OUT_JSON")"
@@ -215,7 +203,6 @@ jobs:
           acr_login_server="$(jq -r '.acr_login_server.value' <<<"$OUT_JSON")"
           swa_token="$(jq -r '.swa_token.value' <<<"$OUT_JSON")"
 
-          # Mask sensitive token in logs
           echo "::add-mask::$swa_token"
 
           {
