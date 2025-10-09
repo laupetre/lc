@@ -23,9 +23,9 @@ output "swa_url" {
   description = "Public URL of the Static Web App."
 }
 
+# azapi output is an object; read properties.apiKey directly
 output "swa_token" {
-  # azapi returns: {"properties":{"apiKey":"<token>"}}
-  value       = jsondecode(azapi_resource_action.swa_secrets.output).properties.apiKey
+  value       = azapi_resource_action.swa_secrets.output.properties.apiKey
   sensitive   = true
   description = "Deployment token for Static Web App."
 }

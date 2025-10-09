@@ -86,15 +86,24 @@ resource "azurerm_container_app" "api" {
     }
   }
 
-  # ACR registry reference (ACR admin is enabled above)
+  # ACR registry reference with credentials via secret
   registry {
-    server = azurerm_container_registry.acr.login_server
+    server               = azurerm_container_registry.acr.login_server
+    username             = azurerm_container_registry.acr.admin_username
+    password_secret_name = "acr-pwd"
   }
 
-  # ✅ Top-level secret block (NOT inside template)
+  # ✅ Top-level secrets (NOT inside template)
+  # OpenAI key for the app
   secret {
     name  = "openai-key"
     value = var.openai_api_key
+  }
+
+  # ACR admin password for registry auth
+  secret {
+    name  = "acr-pwd"
+    value = azurerm_container_registry.acr.admin_password
   }
 }
 
@@ -117,5 +126,6 @@ resource "azapi_resource_action" "swa_secrets" {
   resource_id            = azurerm_static_web_app.swa.id
   action                 = "listSecrets"
   method                 = "POST"
-  response_export_values = ["properties.apiKey"]
+  # We return the properties object so we can access properties.apiKey directly
+  response_export_values = ["properties"]
 }
