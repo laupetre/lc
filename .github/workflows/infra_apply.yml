@@ -82,6 +82,8 @@ jobs:
     env:
       TF_IN_AUTOMATION: true
       TF_INPUT: 0
+      # 👇 Ensure required variable exists for ALL Terraform commands (import/plan/apply)
+      TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
 
     steps:
       - uses: actions/checkout@v4
