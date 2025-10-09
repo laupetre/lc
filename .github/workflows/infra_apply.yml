@@ -82,7 +82,7 @@ jobs:
     env:
       TF_IN_AUTOMATION: true
       TF_INPUT: 0
-      # 👇 Ensure required variable exists for ALL Terraform commands (import/plan/apply)
+      # Ensure required TF variable is present for ALL terraform commands
       TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
 
     steps:
@@ -150,7 +150,7 @@ jobs:
         working-directory: ${{ inputs.tf_dir }}
         run: terraform validate
 
-      # Auto-import resources if they already exist in Azure but not in state
+      # -------- UPDATED STEP --------
       - name: Import existing resources into state (idempotent)
         working-directory: ${{ inputs.tf_dir }}
         run: |
@@ -173,17 +173,34 @@ jobs:
             fi
           }
 
-          import_if_missing \
-            azurerm_container_registry.acr \
-            "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
+          echo "Checking Azure for pre-existing resources before import ..."
 
-          import_if_missing \
-            azurerm_log_analytics_workspace.law \
-            "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.OperationalInsights/workspaces/${LAW_NAME}"
+          # ACR (exists? -> import; not found -> skip, TF will create)
+          if az acr show -g "$RG" -n "$ACR_NAME" >/dev/null 2>&1; then
+            import_if_missing \
+              azurerm_container_registry.acr \
+              "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.ContainerRegistry/registries/${ACR_NAME}"
+          else
+            echo "ACR '$ACR_NAME' not found in resource group '$RG' - skipping import (will be created by Terraform if declared)."
+          fi
 
-          import_if_missing \
-            azurerm_static_web_app.swa \
-            "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.Web/staticSites/${SWA_NAME}"
+          # Log Analytics Workspace
+          if az monitor log-analytics workspace show -g "$RG" -n "$LAW_NAME" >/dev/null 2>&1; then
+            import_if_missing \
+              azurerm_log_analytics_workspace.law \
+              "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.OperationalInsights/workspaces/${LAW_NAME}"
+          else
+            echo "LAW '$LAW_NAME' not found in resource group '$RG' - skipping import."
+          fi
+
+          # Static Web App
+          if az resource show -g "$RG" -n "$SWA_NAME" --resource-type "Microsoft.Web/staticSites" >/dev/null 2>&1; then
+            import_if_missing \
+              azurerm_static_web_app.swa \
+              "/subscriptions/${SUB_ID}/resourceGroups/${RG}/providers/Microsoft.Web/staticSites/${SWA_NAME}"
+          else
+            echo "SWA '$SWA_NAME' not found in resource group '$RG' - skipping import."
+          fi
 
       - name: Terraform plan
         id: plan
