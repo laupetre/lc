@@ -79,8 +79,9 @@ jobs:
           echo "ARM_SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)" >> $GITHUB_ENV
           echo "::add-mask::$(jq -r '.clientSecret' sp.json)"
 
+      # ⬇️ Only change: v3 → v2 to avoid AggregateError
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v2
         with:
           terraform_version: 1.6.6
 
@@ -147,13 +148,12 @@ jobs:
             -backend-config="key=${TFSTATE_KEY}" \
             -backend-config="access_key=${ARM_ACCESS_KEY}"
 
-      # ---------- Import existing Resource Group if it's already in Azure ----------
       - name: Import existing Resource Group into state (if present)
         working-directory: ${{ inputs.tf_dir }}
         env:
           SUBSCRIPTION_ID: ${{ env.ARM_SUBSCRIPTION_ID }}
           RG:              ${{ env.RG_NAME }}
-          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}   # required var
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
           if az group show -n "$RG" >/dev/null 2>&1; then
@@ -162,9 +162,7 @@ jobs:
               terraform import -input=false azurerm_resource_group.rg "$ID"
             fi
           fi
-      # ---------------------------------------------------------------------------
 
-      # ---------- Import Container App if it already exists ----------
       - name: Import existing Container App into state (if present)
         working-directory: ${{ inputs.tf_dir }}
         env:
@@ -180,7 +178,6 @@ jobs:
               terraform import -input=false azurerm_container_app.api "$ID"
             fi
           fi
-      # -----------------------------------------------------------------
 
       - name: Terraform fmt (auto-fix)
         working-directory: ${{ inputs.tf_dir }}
