@@ -4,8 +4,6 @@
 provider "azurerm" {
   features {}
 }
-
-# (optional) used to call listSecrets on the Static Web App
 provider "azapi" {}
 
 ############################################
@@ -54,7 +52,6 @@ resource "azurerm_container_app" "api" {
   container_app_environment_id = azurerm_container_app_environment.env.id
   revision_mode                = "Single"
 
-  # Public ingress
   ingress {
     external_enabled = true
     target_port      = var.container_port
@@ -65,11 +62,11 @@ resource "azurerm_container_app" "api" {
     }
   }
 
-  # Template / container definition
   template {
     container {
       name   = "api"
-      image  = "${azurerm_container_registry.acr.login_server}/${var.image_name}:${var.image_tag}"
+      # Bootstrap with a public image so infra doesn't fail before ACR is seeded.
+      image  = var.bootstrap_image != "" ? var.bootstrap_image : "${azurerm_container_registry.acr.login_server}/${var.image_name}:${var.image_tag}"
       cpu    = 0.5
       memory = "1Gi"
 
@@ -78,7 +75,6 @@ resource "azurerm_container_app" "api" {
         value = var.openai_model
       }
 
-      # This references the top-level secret declared below
       env {
         name        = "OPENAI_API_KEY"
         secret_name = "openai-key"
@@ -86,21 +82,17 @@ resource "azurerm_container_app" "api" {
     }
   }
 
-  # ACR registry reference with credentials via secret
   registry {
     server               = azurerm_container_registry.acr.login_server
     username             = azurerm_container_registry.acr.admin_username
     password_secret_name = "acr-pwd"
   }
 
-  # ✅ Top-level secrets (NOT inside template)
-  # OpenAI key for the app
   secret {
     name  = "openai-key"
     value = var.openai_api_key
   }
 
-  # ACR admin password for registry auth
   secret {
     name  = "acr-pwd"
     value = azurerm_container_registry.acr.admin_password
@@ -108,8 +100,7 @@ resource "azurerm_container_app" "api" {
 }
 
 ############################################
-# Static Web App (new resource, not deprecated)
-# Must be deployed in a supported region (e.g., eastus2)
+# Static Web App (new resource)
 ############################################
 resource "azurerm_static_web_app" "swa" {
   name                = "lc-swa-web"
@@ -126,6 +117,5 @@ resource "azapi_resource_action" "swa_secrets" {
   resource_id            = azurerm_static_web_app.swa.id
   action                 = "listSecrets"
   method                 = "POST"
-  # We return the properties object so we can access properties.apiKey directly
   response_export_values = ["properties"]
 }

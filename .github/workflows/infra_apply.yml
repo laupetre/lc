@@ -9,19 +9,16 @@ on:
         default: "infra"
     outputs:
       api_url:
-        description: "Public URL of the Container App"
         value: ${{ jobs.plan-apply.outputs.api_url }}
       api_hostname:
-        description: "FQDN of the Container App"
         value: ${{ jobs.plan-apply.outputs.api_hostname }}
       swa_token:
-        description: "SWA deployment token"
         value: ${{ jobs.plan-apply.outputs.swa_token }}
-
+      acr_login_server:
+        value: ${{ jobs.plan-apply.outputs.acr_login_server }}
   workflow_dispatch:
     inputs:
       tf_dir:
-        description: "Terraform folder"
         required: false
         default: "infra"
         type: string
@@ -39,11 +36,11 @@ env:
 
   # Remote state config
   TFSTATE_RG: tfstate-rg
-  TFSTATE_SA: tfstate-${{ github.repository_owner }}-${{ github.event.repository.name }}
+  TFSTATE_SA: tfstate${{ github.repository_owner }}${{ github.event.repository.name }}
   TFSTATE_CONTAINER: tfstate
   TFSTATE_KEY: prod.terraform.tfstate
 
-  # Must match infra/variables.tf (or override via TF_VARs)
+  # Must match variables.tf
   RG_NAME: lc-swa-rg
   CONTAINERAPP_NAME: lc-swa-api
 
@@ -57,6 +54,7 @@ jobs:
       api_url: ${{ steps.expose.outputs.api_url }}
       api_hostname: ${{ steps.expose.outputs.api_hostname }}
       swa_token: ${{ steps.expose.outputs.swa_token }}
+      acr_login_server: ${{ steps.expose.outputs.acr_login_server }}
 
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +77,6 @@ jobs:
           echo "ARM_SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)" >> $GITHUB_ENV
           echo "::add-mask::$(jq -r '.clientSecret' sp.json)"
 
-      # ⬇️ Only change: v3 → v2 to avoid AggregateError
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
@@ -89,8 +86,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SA_RAW="${TFSTATE_SA,,}"
-          SA_RAW="${SA_RAW//[^a-z0-9]/}"
+          SA_RAW="${TFSTATE_SA,,}"; SA_RAW="${SA_RAW//[^a-z0-9]/}"
           SA_TRUNC="${SA_RAW:0:24}"
           echo "SANITIZED_SA=${SA_TRUNC}" >> $GITHUB_ENV
 
@@ -119,7 +115,7 @@ jobs:
           KEY:       ${{ env.ARM_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          for i in {1..30}; do
+          for _ in {1..30}; do
             EXISTS=$(az storage container exists \
                        --account-name "$ACCOUNT" \
                        --name "$CONTAINER" \
@@ -211,6 +207,7 @@ jobs:
         run: |
           echo "api_url=$(terraform output -raw api_url)" >> $GITHUB_OUTPUT
           echo "api_hostname=$(terraform output -raw api_hostname)" >> $GITHUB_OUTPUT
+          echo "acr_login_server=$(terraform output -raw acr_login_server)" >> $GITHUB_OUTPUT
           SWA_TOKEN=$(terraform output -raw swa_token)
           echo "::add-mask::$SWA_TOKEN"
           echo "swa_token=$SWA_TOKEN" >> $GITHUB_OUTPUT

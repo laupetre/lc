@@ -1,77 +1,35 @@
-name: Deploy SWA
+name: Deploy Static Web App
 
 on:
   workflow_call:
     inputs:
-      api_base_url:
-        description: "API base URL to inject into the web app"
+      app_location:   { type: string, required: false, default: "web" }
+      output_location:{ type: string, required: false, default: "web" }
+    secrets:
+      SWA_DEPLOYMENT_TOKEN:
         required: true
-        type: string
-      swa_deploy_token:                   # <-- NEW
-        description: "SWA deployment token (from infra)"
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      api_base_url:
-        description: "API base URL to inject into the web app"
-        required: true
-        type: string
-      swa_deploy_token:                   # optional if you dispatch manually and paste it
-        description: "SWA deployment token (from infra)"
-        required: true
-        type: string
+  push:
+    paths:
+      - "web/**"
+      - ".github/workflows/swa_deploy.yml"
+    branches: [ main ]
 
 concurrency:
   group: swa-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  APP_LOCATION: web
-  OUTPUT_LOCATION: dist
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      # Re-mask the token in this job
-      - name: Mask SWA token
-        run: echo "::add-mask::${{ inputs.swa_deploy_token }}"
-
-      - name: Inject API URL into web/config.js
-        run: |
-          set -euo pipefail
-          TEMPLATE="${APP_LOCATION}/config.template.js"
-          TARGET="${APP_LOCATION}/config.js"
-          if [ -f "$TEMPLATE" ]; then
-            sed "s|__API_BASE_URL__|${{ inputs.api_base_url }}|g" "$TEMPLATE" > "$TARGET"
-          else
-            echo "window.__API_BASE__='${{ inputs.api_base_url }}';" > "$TARGET"
-          fi
-          tail -n +1 "$TARGET"
-
-      - name: Build (example npm)
-        working-directory: ${{ env.APP_LOCATION }}
-        run: |
-          if [ -f package.json ]; then
-            npm ci
-            npm run build
-          else
-            mkdir -p ../${OUTPUT_LOCATION}
-            cp -r . ../${OUTPUT_LOCATION}/
-          fi
-
-      - name: Deploy to Azure Static Web Apps
-        uses: azure/static-web-apps-deploy@v1
+      - name: Deploy to SWA
+        uses: Azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ inputs.swa_deploy_token }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: "upload"
-          app_location: ${{ env.APP_LOCATION }}
-          output_location: ${{ env.OUTPUT_LOCATION }}
+          azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
+          app_location:   ${{ inputs.app_location }}
+          output_location:${{ inputs.output_location }}

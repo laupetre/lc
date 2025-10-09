@@ -2,27 +2,28 @@ name: Deploy API
 
 on:
   workflow_call:
-  workflow_dispatch:
+    inputs:
+      rg_name:              { type: string, required: true }
+      containerapp_name:    { type: string, required: true }
+      acr_name:             { type: string, required: true }
+      image_name:           { type: string, required: true, default: "lc-swa-api" }
+      context_dir:          { type: string, required: false, default: "api" }
+  push:
+    paths:
+      - "api/**"
+      - ".github/workflows/api_deploy.yml"
+    branches: [ main ]
 
-# Different group from parent to avoid deadlock
 concurrency:
   group: api-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  RG_NAME: lc-swa-rg
-  CONTAINERAPP_NAME: lc-swa-api
-  ACR_NAME: lcacrio
-  IMAGE_NAME: lc-swa-api
-  OPENAI_MODEL: gpt-4o-mini
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -31,19 +32,27 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Build image
+      - name: Build & push API image to ACR
+        env:
+          ACR_NAME:  ${{ inputs.acr_name }}
+          IMAGE:     ${{ inputs.image_name }}
+          CONTEXT:   ${{ inputs.context_dir }}
         run: |
-          docker build -t $ACR_NAME.azurecr.io/$IMAGE_NAME:${GITHUB_SHA} ./api
+          set -euo pipefail
+          az acr login --name "$ACR_NAME"
+          docker build -t $ACR_NAME.azurecr.io/$IMAGE:${{ github.sha }} -t $ACR_NAME.azurecr.io/$IMAGE:latest "$CONTEXT"
+          docker push  $ACR_NAME.azurecr.io/$IMAGE:${{ github.sha }}
+          docker push  $ACR_NAME.azurecr.io/$IMAGE:latest
 
-      - name: ACR login & push
+      - name: Update Container App image
+        env:
+          RG:   ${{ inputs.rg_name }}
+          APP:  ${{ inputs.containerapp_name }}
+          ACR:  ${{ inputs.acr_name }}
+          IMG:  ${{ inputs.image_name }}
         run: |
-          az acr login --name $ACR_NAME
-          docker push $ACR_NAME.azurecr.io/$IMAGE_NAME:${GITHUB_SHA}
-
-      - name: Update Container App to new image
-        run: |
+          set -euo pipefail
           az containerapp update \
-            -g "$RG_NAME" \
-            -n "$CONTAINERAPP_NAME" \
-            --image "$ACR_NAME.azurecr.io/$IMAGE_NAME:${GITHUB_SHA}" \
-            --set-env-vars OPENAI_MODEL="$OPENAI_MODEL"
+            --name "$APP" \
+            --resource-group "$RG" \
+            --image "$ACR.azurecr.io/$IMG:${{ github.sha }}"

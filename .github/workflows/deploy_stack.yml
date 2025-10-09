@@ -1,33 +1,46 @@
 name: Deploy full stack (infra → api → swa)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   push:
     branches: [ main ]
+    paths:
+      - "infra/**"
+      - "api/**"
+      - "web/**"
+      - ".github/workflows/**"
 
 concurrency:
-  group: fullstack-${{ github.ref }}
-  cancel-in-progress: true
+  group: prod-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   infra:
     name: Infra
     uses: ./.github/workflows/infra_apply.yml
-    with:
-      tf_dir: infra
     secrets: inherit
 
   api:
-    name: Deploy API
+    name: API
     needs: infra
     uses: ./.github/workflows/api_deploy.yml
+    with:
+      rg_name:           "lc-swa-rg"
+      containerapp_name: "lc-swa-api"
+      acr_name:          "lcacrio"
+      image_name:        "lc-swa-api"
+      context_dir:       "api"
     secrets: inherit
 
   swa:
-    name: Deploy SWA
-    needs: [infra, api]
+    name: SWA
+    needs: infra
     uses: ./.github/workflows/swa_deploy.yml
     with:
-      api_base_url:   ${{ needs.infra.outputs.api_url }}
-      swa_deploy_token: ${{ needs.infra.outputs.swa_token }}   # <-- NEW
-    secrets: inherit
+      app_location:    "web"
+      output_location: "web"
+    secrets:
+      SWA_DEPLOYMENT_TOKEN: ${{ needs.infra.outputs.swa_token }}
