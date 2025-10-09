@@ -3,16 +3,24 @@ name: Deploy Static Web App
 on:
   workflow_call:
     inputs:
-      app_location:   { type: string, required: false, default: "web" }
-      output_location:{ type: string, required: false, default: "web" }
+      app_location:
+        type: string
+        required: false
+        default: web
+      output_location:
+        type: string
+        required: false
+        default: web
     secrets:
       SWA_DEPLOYMENT_TOKEN:
         required: true
+
   push:
+    branches:
+      - main
     paths:
-      - "web/**"
-      - ".github/workflows/swa_deploy.yml"
-    branches: [ main ]
+      - web/**
+      - .github/workflows/swa_deploy.yml
 
 concurrency:
   group: swa-${{ github.ref }}
@@ -27,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to SWA
+      - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
