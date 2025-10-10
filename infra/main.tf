@@ -1,10 +1,12 @@
-############################################
-# Providers
-############################################
 provider "azurerm" {
   features {}
 }
-provider "azapi" {}
+
+# Force azapi to use the Azure CLI credential established by azure/login,
+# so it does NOT attempt Managed Identity (IMDS) in the runner.
+provider "azapi" {
+  use_cli = true
+}
 
 ############################################
 # Resource Group
