@@ -1,63 +1,66 @@
 variable "location" {
   type        = string
+  description = "Azure location"
   default     = "eastus"
-  description = "Primary location for Container Apps, ACR, Log Analytics."
-}
-
-variable "swa_location" {
-  type        = string
-  default     = "eastus2"
-  description = "Location for Static Web App (must be one of: westus2, centralus, eastus2, westeurope, eastasia)."
 }
 
 variable "resource_group_name" {
-  type    = string
-  default = "lc-swa-rg"
+  type        = string
+  description = "Resource group for all resources"
+  default     = "lc-swa-rg"
 }
 
 variable "acr_name" {
-  type    = string
-  default = "lcacrio"
+  type        = string
+  description = "Azure Container Registry name"
+  default     = "lcacrio"
 }
 
 variable "containerapps_env_name" {
-  type    = string
-  default = "lc-swa-env"
+  type        = string
+  description = "Azure Container Apps environment name"
+  default     = "lc-swa-env"
 }
 
 variable "containerapp_name" {
-  type    = string
-  default = "lc-swa-api"
+  type        = string
+  description = "Container App name"
+  default     = "lc-swa-api"
 }
 
 variable "image_name" {
-  type    = string
-  default = "lc-swa-api"
+  type        = string
+  description = "Image repo name inside ACR"
+  default     = "lc-swa-api"
 }
 
 variable "image_tag" {
-  type    = string
-  default = "latest"
+  type        = string
+  description = "Image tag"
+  default     = "latest"
 }
 
 variable "container_port" {
-  type    = number
-  default = 8000
+  type        = number
+  description = "Container exposed port"
+  default     = 8000
 }
 
 variable "openai_model" {
-  type    = string
-  default = "gpt-4o-mini"
+  type        = string
+  description = "OpenAI model"
+  default     = "gpt-4o-mini"
 }
 
 variable "openai_api_key" {
   type        = string
+  description = "OpenAI API key"
   sensitive   = true
-  description = "OpenAI API key injected into the API container as a secret."
+  default     = null
 }
 
-variable "bootstrap_image" {
-  type        = string
-  default     = "mcr.microsoft.com/azuredocs/aci-helloworld:latest"
-  description = "Initial public image for Container App so infra can succeed before an ACR image exists."
-}
+# NEW: allow explicit SP credentials to be passed to azapi (fallback to CLI)
+variable "arm_client_id"       { type = string, default = null }
+variable "arm_client_secret"   { type = string, default = null, sensitive = true }
+variable "arm_tenant_id"       { type = string, default = null }
+variable "arm_subscription_id" { type = string, default = null }

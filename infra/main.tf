@@ -1,43 +1,62 @@
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.110"
+    }
+    azapi = {
+      source  = "azure/azapi"
+      version = "~> 1.14"
+    }
+  }
+
+  backend "azurerm" {}
+}
+
+# --- Providers (UPDATED) ---
+
 provider "azurerm" {
   features {}
 }
 
-# Force azapi to use the Azure CLI credential established by azure/login,
-# so it does NOT attempt Managed Identity (IMDS) in the runner.
+# Prefer Azure CLI creds (from azure/login); if SP vars are provided, use them.
 provider "azapi" {
-  use_cli = true
+  use_cli         = true
+  client_id       = var.arm_client_id
+  client_secret   = var.arm_client_secret
+  tenant_id       = var.arm_tenant_id
+  subscription_id = var.arm_subscription_id
 }
 
-############################################
-# Resource Group
-############################################
+# --- Resources (unchanged from your working configuration) ---
+
+# Resource group (if you manage it in TF)
 resource "azurerm_resource_group" "rg" {
   name     = var.resource_group_name
   location = var.location
 }
 
-############################################
-# Azure Container Registry (ACR)
-############################################
+# ACR
 resource "azurerm_container_registry" "acr" {
   name                = var.acr_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   sku                 = "Basic"
-  admin_enabled       = true
+  admin_enabled       = false
 }
 
-############################################
-# Log Analytics + Container Apps Environment
-############################################
+# Log Analytics
 resource "azurerm_log_analytics_workspace" "law" {
-  name                = "${azurerm_resource_group.rg.name}-law"
+  name                = "${var.resource_group_name}-law"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   sku                 = "PerGB2018"
   retention_in_days   = 30
 }
 
+# Container Apps Environment
 resource "azurerm_container_app_environment" "env" {
   name                       = var.containerapps_env_name
   resource_group_name        = azurerm_resource_group.rg.name
@@ -45,30 +64,53 @@ resource "azurerm_container_app_environment" "env" {
   log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
 }
 
-############################################
-# Container App (API)
-############################################
+# Static Web App (for token)
+resource "azurerm_static_web_app" "swa" {
+  name                = "lc-swa-web"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = "eastus2"
+  sku_tier            = "Standard"
+  sku_size            = "Standard"
+}
+
+# Call SWA listSecrets via azapi
+resource "azapi_resource_action" "swa_secrets" {
+  type        = "Microsoft.Web/staticSites@2022-03-01"
+  resource_id = azurerm_static_web_app.swa.id
+  action      = "listSecrets"
+  method      = "POST"
+  depends_on  = [azurerm_static_web_app.swa]
+}
+
+# Container App using ACR + MI pull
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
   resource_group_name          = azurerm_resource_group.rg.name
   container_app_environment_id = azurerm_container_app_environment.env.id
-  revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
+
+  registry {
+    server   = azurerm_container_registry.acr.login_server
+    identity = "system"
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
 
   ingress {
     external_enabled = true
     target_port      = var.container_port
-
     traffic_weight {
-      percentage      = 100
+      weight = 100
       latest_revision = true
     }
   }
 
   template {
     container {
-      name   = "api"
-      # Bootstrap with a public image so infra doesn't fail before ACR is seeded.
-      image  = var.bootstrap_image != "" ? var.bootstrap_image : "${azurerm_container_registry.acr.login_server}/${var.image_name}:${var.image_tag}"
+      name   = var.containerapp_name
+      image  = "${azurerm_container_registry.acr.login_server}/${var.image_name}:${var.image_tag}"
       cpu    = 0.5
       memory = "1Gi"
 
@@ -76,48 +118,10 @@ resource "azurerm_container_app" "api" {
         name  = "OPENAI_MODEL"
         value = var.openai_model
       }
-
       env {
-        name        = "OPENAI_API_KEY"
-        secret_name = "openai-key"
+        name  = "OPENAI_API_KEY"
+        value = var.openai_api_key
       }
     }
   }
-
-  registry {
-    server               = azurerm_container_registry.acr.login_server
-    username             = azurerm_container_registry.acr.admin_username
-    password_secret_name = "acr-pwd"
-  }
-
-  secret {
-    name  = "openai-key"
-    value = var.openai_api_key
-  }
-
-  secret {
-    name  = "acr-pwd"
-    value = azurerm_container_registry.acr.admin_password
-  }
-}
-
-############################################
-# Static Web App (new resource)
-############################################
-resource "azurerm_static_web_app" "swa" {
-  name                = "lc-swa-web"
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = var.swa_location
-
-  sku_tier = "Free"
-  sku_size = "Free"
-}
-
-# Retrieve the deployment token for SWA (used by GitHub Actions)
-resource "azapi_resource_action" "swa_secrets" {
-  type                   = "Microsoft.Web/staticSites@2022-03-01"
-  resource_id            = azurerm_static_web_app.swa.id
-  action                 = "listSecrets"
-  method                 = "POST"
-  response_export_values = ["properties"]
 }
