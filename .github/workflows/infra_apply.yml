@@ -1,6 +1,23 @@
 name: Apply Infra
 
 on:
+  # Allow this workflow to be CALLED from other workflows (reusable workflow)
+  workflow_call:
+    inputs:
+      tf_dir:
+        description: Path to the Terraform directory
+        type: string
+        default: infra
+      cleanup_level:
+        description: Cleanup mode (none|soft|hard) – not used here but preserved
+        type: string
+        default: none
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+      OPENAI_API_KEY:
+        required: false
+  # Optional: still allow running it directly
   workflow_dispatch:
     inputs:
       tf_dir:
@@ -43,7 +60,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Azure login using your SP JSON in AZURE_CREDENTIALS
       - name: Azure login (Service Principal JSON)
         uses: azure/login@v2
         with:
@@ -54,7 +70,7 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      # Make the SP available to Terraform (for azapi provider, if CLI chain isn't enough)
+      # Make SP creds also available as TF variables (azapi fallback if CLI chain isn’t enough)
       - name: Export SP vars for azapi
         run: |
           set -euo pipefail
@@ -64,7 +80,7 @@ jobs:
           echo "TF_VAR_arm_subscription_id=$(jq -r .subscriptionId <<< '${{ secrets.AZURE_CREDENTIALS }}')" >> $GITHUB_ENV
 
           echo "ARM_SUBSCRIPTION_ID=$(jq -r .subscriptionId <<< '${{ secrets.AZURE_CREDENTIALS }}')" >> $GITHUB_ENV
-          # Adjust these if you parameterize RG/Env name
+          # Adjust if you parameterize RG/Env names
           echo "AZURE_RESOURCE_GROUP=lc-swa-rg"   >> $GITHUB_ENV
           echo "CONTAINERAPPS_ENV_NAME=lc-swa-env" >> $GITHUB_ENV
 
@@ -72,8 +88,6 @@ jobs:
         id: tfstate
         run: |
           set -euo pipefail
-
-          # Required for azurerm backend
           RG_NAME="tfstate-rg"
           SA_NAME="tfstatelaupetrelc"
           CONTAINER="tfstate"
@@ -93,7 +107,6 @@ jobs:
           echo "TF_STATE_SA=$SA_NAME"           >> $GITHUB_ENV
           echo "TF_STATE_CONTAINER=$CONTAINER"  >> $GITHUB_ENV
           echo "TF_STATE_KEY=$KEY"              >> $GITHUB_ENV
-          echo "TF_STATE_KEY_MASKED=$KEY"       >> $GITHUB_OUTPUT
 
       - name: Terraform Init (azurerm backend)
         working-directory: ${{ inputs.tf_dir }}
@@ -106,9 +119,7 @@ jobs:
             -backend-config="container_name=${TF_STATE_CONTAINER}" \
             -backend-config="key=${TF_STATE_KEY}"
 
-      # -------------------------------
-      # NEW: Import the ACA Environment
-      # -------------------------------
+      # Idempotently adopt the ACA Environment if it already exists
       - name: Import ACA Environment (idempotent)
         working-directory: ${{ inputs.tf_dir }}
         run: |
@@ -134,22 +145,17 @@ jobs:
           set -euo pipefail
           terraform apply -input=false -auto-approve tfplan
 
-      # Expose useful outputs to downstream jobs
       - name: Expose infra outputs to caller
         id: expose
         working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
-
           OUT_JSON="$(terraform output -json)"
-
           api_url="$(jq -r '.api_url.value' <<<"$OUT_JSON")"
           api_hostname="$(jq -r '.api_hostname.value' <<<"$OUT_JSON")"
           acr_login_server="$(jq -r '.acr_login_server.value' <<<"$OUT_JSON")"
           swa_token="$(jq -r '.swa_token.value' <<<"$OUT_JSON")"
-
           echo "::add-mask::$swa_token"
-
           {
             echo "api_url=$api_url"
             echo "api_hostname=$api_hostname"
