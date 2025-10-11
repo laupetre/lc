@@ -3,24 +3,46 @@ name: Deploy API
 on:
   workflow_call:
     inputs:
-      rg_name:            { type: string, required: true }
-      containerapp_name:  { type: string, required: true }
-      # pass the full login server (e.g. lcacrio.azurecr.io) from infra
-      acr_login_server:   { type: string, required: true }
-      image_name:         { type: string, required: true, default: "lc-swa-api" }
-      context_dir:        { type: string, required: false, default: "api" }
-  push:
-    paths:
-      - "api/**"
-      - ".github/workflows/api_deploy.yml"
-    branches: [ main ]
+      acr_name:
+        type: string
+        required: true
+      image_name:
+        type: string
+        default: lc-swa-api
+      image_tag:
+        type: string
+        default: latest
+      api_dir:
+        type: string
+        default: api
+      rg:
+        type: string
+        default: lc-swa-rg
+      containerapp_env:
+        type: string
+        default: lc-swa-env
+      containerapp_name:
+        type: string
+        default: lc-swa-api
+      api_port:
+        type: number
+        default: 8000
+    secrets:
+      AZURE_CLIENT_ID:        { required: true }
+      AZURE_TENANT_ID:        { required: true }
+      AZURE_SUBSCRIPTION_ID:  { required: true }
 
-concurrency:
-  group: api-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_dispatch:
 
 permissions:
+  id-token: write
   contents: read
+
+env:
+  ARM_USE_OIDC: true
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
 jobs:
   deploy:
@@ -28,40 +50,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build & push API image to ACR
+        working-directory: ${{ inputs.api_dir }}
         env:
-          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}   # e.g. lcacrio.azurecr.io
-          IMAGE:            ${{ inputs.image_name }}
-          CONTEXT:          ${{ inputs.context_dir }}
+          ACR: ${{ inputs.acr_name }}
+          IMAGE: ${{ inputs.image_name }}
+          TAG: ${{ inputs.image_tag }}
         run: |
           set -euo pipefail
+          az acr login --name "$ACR"
+          docker build -t "$ACR.azurecr.io/$IMAGE:$TAG" .
+          docker push "$ACR.azurecr.io/$IMAGE:$TAG"
 
-          # Derive the bare registry name for 'az acr login'
-          ACR_NAME="${ACR_LOGIN_SERVER%%.*}"   # lcacrio.azurecr.io -> lcacrio
-
-          # Login to ACR
-          az acr login --name "$ACR_NAME"
-
-          # Build & push (use the full login server in the tag)
-          docker build -t $ACR_LOGIN_SERVER/$IMAGE:${{ github.sha }} \
-                       -t $ACR_LOGIN_SERVER/$IMAGE:latest "$CONTEXT"
-          docker push  $ACR_LOGIN_SERVER/$IMAGE:${{ github.sha }}
-          docker push  $ACR_LOGIN_SERVER/$IMAGE:latest
-
-      - name: Update Container App image
+      - name: Create/Update Container App
         env:
-          RG:               ${{ inputs.rg_name }}
-          APP:              ${{ inputs.containerapp_name }}
-          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
-          IMG:              ${{ inputs.image_name }}
+          RG:  ${{ inputs.rg }}
+          ENV: ${{ inputs.containerapp_env }}
+          APP: ${{ inputs.containerapp_name }}
+          ACR: ${{ inputs.acr_name }}
+          IMG: ${{ inputs.image_name }}
+          TAG: ${{ inputs.image_tag }}
+          PORT: ${{ inputs.api_port }}
         run: |
           set -euo pipefail
-          az containerapp update \
+          # Ensure registry permission for the Container App environment
+          az containerapp registry set \
             --name "$APP" \
             --resource-group "$RG" \
-            --image "$ACR_LOGIN_SERVER/$IMG:${{ github.sha }}"
+            --server "$ACR.azurecr.io" \
+            --identity system-assigned || true
+
+          # Create if missing, otherwise update
+          if ! az containerapp show -n "$APP" -g "$RG" >/dev/null 2>&1; then
+            az containerapp create -n "$APP" -g "$RG" --environment "$ENV" \
+              --image "$ACR.azurecr.io/$IMG:$TAG" \
+              --target-port "$PORT" --ingress external \
+              --registry-server "$ACR.azurecr.io" \
+              --query properties.configuration.ingress.fqdn -o tsv
+          else
+            az containerapp update -n "$APP" -g "$RG" \
+              --image "$ACR.azurecr.io/$IMG:$TAG" \
+              --set-env-vars ALLOWED_ORIGIN=* \
+              --query properties.latestRevisionFqdn -o tsv
+          fi

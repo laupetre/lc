@@ -1,47 +1,55 @@
 name: Deploy full stack (infra → api → swa)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths:
-      - "infra/**"
-      - "api/**"
-      - "web/**"
-      - ".github/workflows/**"
+      - 'infra/**'
+      - 'api/**'
+      - 'web/**'
+      - '.github/workflows/**'
 
 concurrency:
-  group: prod-deploy-${{ github.ref }}
-  cancel-in-progress: false
+  group: prod-deploy-refs/heads/main
+  cancel-in-progress: true
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
   infra:
-    name: Infra
     uses: ./.github/workflows/infra_apply.yml
-    secrets: inherit
+    with:
+      tf_dir: infra
+    secrets:
+      AZURE_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      OPENAI_API_KEY:        ${{ secrets.OPENAI_API_KEY }}
 
   api:
-    name: API
     needs: infra
     uses: ./.github/workflows/api_deploy.yml
     with:
-      rg_name:            "lc-swa-rg"
-      containerapp_name:  "lc-swa-api"
-      # pass the login server from infra outputs (e.g. lcacrio.azurecr.io)
-      acr_login_server:   ${{ needs.infra.outputs.acr_login_server }}
-      image_name:         "lc-swa-api"
-      context_dir:        "api"
-    secrets: inherit
+      acr_name: ${{ needs.infra.outputs.acr_login_server && fromJSON('{"v":"'+ needs.infra.outputs.acr_login_server +'"}').v.split('.')[0] || 'lcacrio' }}
+      image_name: lc-swa-api
+      image_tag: latest
+      api_dir: api
+      rg: lc-swa-rg
+      containerapp_env: lc-swa-env
+      containerapp_name: lc-swa-api
+      api_port: 8000
+    secrets:
+      AZURE_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
   swa:
-    name: SWA
-    needs: infra
+    needs: [infra, api]
     uses: ./.github/workflows/swa_deploy.yml
     with:
-      app_location:    "web"
-      output_location: "web"
-    secrets:
-      SWA_DEPLOYMENT_TOKEN: ${{ needs.infra.outputs.swa_token }}
+      web_dir: web
+      swa_name: lc-swa-web
+      swa_token: ${{ needs.infra.outputs.swa_token }}
