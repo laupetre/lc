@@ -50,7 +50,6 @@ permissions:
 env:
   TF_IN_AUTOMATION: true
   TF_INPUT: false
-  # Let Terraform & Azure SDK use OIDC automatically
   ARM_USE_OIDC: true
   ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
   ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -60,10 +59,6 @@ jobs:
   apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
       - name: Checkout
@@ -84,7 +79,7 @@ jobs:
       - name: Export common env
         run: |
           set -euo pipefail
-          echo "AZURE_RESOURCE_GROUP=lc-swa-rg"   >> $GITHUB_ENV
+          echo "AZURE_RESOURCE_GROUP=lc-swa-rg"    >> $GITHUB_ENV
           echo "CONTAINERAPPS_ENV_NAME=lc-swa-env" >> $GITHUB_ENV
 
       - name: Ensure tfstate backend (RG/SA) + fetch key
@@ -112,9 +107,10 @@ jobs:
           echo "TF_STATE_KEY=$KEY"              >> $GITHUB_ENV
 
       - name: Terraform Init (azurerm backend)
+        working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
-          terraform -chdir="${{ inputs.tf_dir }}" init \
+          terraform init \
             -input=false \
             -backend-config="resource_group_name=${TF_STATE_RG}" \
             -backend-config="storage_account_name=${TF_STATE_SA}" \
@@ -122,37 +118,41 @@ jobs:
             -backend-config="key=${TF_STATE_KEY}"
 
       - name: Import ACA Environment (idempotent)
+        working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
           ENV_ID="/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${AZURE_RESOURCE_GROUP}/providers/Microsoft.App/managedEnvironments/${CONTAINERAPPS_ENV_NAME}"
-          if ! terraform -chdir="${{ inputs.tf_dir }}" state show azurerm_container_app_environment.env >/dev/null 2>&1; then
-            terraform -chdir="${{ inputs.tf_dir }}" import azurerm_container_app_environment.env "$ENV_ID" || true
+          if ! terraform state show azurerm_container_app_environment.env >/dev/null 2>&1; then
+            terraform import azurerm_container_app_environment.env "$ENV_ID" || true
           fi
 
       - name: Terraform Plan
         id: plan
+        working-directory: ${{ inputs.tf_dir }}
         env:
           TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
-          terraform -chdir="${{ inputs.tf_dir }}" fmt -check
-          terraform -chdir="${{ inputs.tf_dir }}" validate
-          terraform -chdir="${{ inputs.tf_dir }}" plan -out tfplan
+          terraform fmt -check
+          terraform validate
+          terraform plan -out tfplan
 
       - name: Terraform Apply
+        working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
-          terraform -chdir="${{ inputs.tf_dir }}" apply -input=false -auto-approve tfplan
+          terraform apply -input=false -auto-approve tfplan
 
       - name: Expose infra outputs to caller
         id: expose
+        working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
-          OUT_JSON="$(terraform -chdir="${{ inputs.tf_dir }}" output -json)"
-          api_url="$(jq -r '.api_url.value'         <<<"$OUT_JSON")"
+          OUT_JSON="$(terraform output -json)"
+          api_url="$(jq -r '.api_url.value' <<<"$OUT_JSON")"
           api_hostname="$(jq -r '.api_hostname.value' <<<"$OUT_JSON")"
           acr_login_server="$(jq -r '.acr_login_server.value' <<<"$OUT_JSON")"
-          swa_token="$(jq -r '.swa_token.value'     <<<"$OUT_JSON")"
+          swa_token="$(jq -r '.swa_token.value' <<<"$OUT_JSON")"
           echo "::add-mask::$swa_token"
           {
             echo "api_url=$api_url"
