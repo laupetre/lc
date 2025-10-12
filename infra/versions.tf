@@ -4,7 +4,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.116"
+      version = "~> 3.110"
     }
     azapi = {
       source  = "azure/azapi"
@@ -12,5 +12,10 @@ terraform {
     }
   }
 
+  # Single backend declaration (init values are supplied via -backend-config in CI)
   backend "azurerm" {}
+}
+
+provider "azurerm" {
+  features {}
 }
