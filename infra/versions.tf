@@ -12,14 +12,16 @@ terraform {
     }
   }
 
-  # Backend is configured from your GitHub Actions with -backend-config
   backend "azurerm" {}
 }
 
-# Providers (centralized here only)
 provider "azurerm" {
-  features {}
+  features {
+    resource_group {
+      # Allow RG deletion even if Azure still reports nested resources.
+      prevent_deletion_if_contains_resources = false
+    }
+  }
 }
 
-# With OIDC env (ARM_USE_OIDC/ARM_*), azapi will auth automatically
 provider "azapi" {}
