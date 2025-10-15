@@ -8,6 +8,7 @@ on:
         required: false
         type: string
         default: infra
+
       # Backend (tfstate) settings
       backend_rg:
         required: true
@@ -21,6 +22,7 @@ on:
       backend_key:
         required: true
         type: string
+
       # Infra resource names (used for idempotent imports)
       rg_name:
         required: true
@@ -37,6 +39,9 @@ on:
       swa_name:
         required: true
         type: string
+      app_name:              # <-- NEW
+        required: true
+        type: string
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -46,7 +51,7 @@ on:
         required: true
 
 permissions:
-  id-token: write     # for OIDC
+  id-token: write
   contents: read
 
 jobs:
@@ -55,8 +60,8 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       ARM_USE_OIDC: "true"
-      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
     steps:
@@ -66,11 +71,11 @@ jobs:
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id:     ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Select subscription (belt & suspenders)
+      - name: Select subscription
         run: az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Setup Terraform
@@ -103,10 +108,8 @@ jobs:
         run: |
           set -euo pipefail
           if az group show -n "$RG" --query name -o tsv >/dev/null 2>&1; then
-            echo "RG exists -> importing into state"
-            terraform import -no-color azurerm_resource_group.rg "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}" || true
-          else
-            echo "RG not found, skipping import (terraform will create it)"
+            terraform import -no-color azurerm_resource_group.rg \
+              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}" || true
           fi
 
       - name: Import ACR into state (idempotent)
@@ -117,11 +120,8 @@ jobs:
         run: |
           set -euo pipefail
           if az acr show -n "$ACR" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
-            echo "ACR exists -> importing"
             terraform import -no-color azurerm_container_registry.acr \
               "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.ContainerRegistry/registries/${ACR}" || true
-          else
-            echo "ACR not found, skipping import"
           fi
 
       - name: Import Log Analytics into state (idempotent)
@@ -132,11 +132,8 @@ jobs:
         run: |
           set -euo pipefail
           if az monitor log-analytics workspace show -n "$LAW" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
-            echo "LAW exists -> importing"
             terraform import -no-color azurerm_log_analytics_workspace.law \
               "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.OperationalInsights/workspaces/${LAW}" || true
-          else
-            echo "LAW not found, skipping import"
           fi
 
       - name: Import ACA Environment into state (idempotent)
@@ -147,14 +144,11 @@ jobs:
         run: |
           set -euo pipefail
           if az containerapp env show -g "$RG" -n "$ENV_NAME" --query name -o tsv >/dev/null 2>&1; then
-            echo "ACA Env exists -> importing"
             terraform import -no-color azurerm_container_app_environment.env \
               "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/managedEnvironments/${ENV_NAME}" || true
-          else
-            echo "ACA Env not found, skipping import"
           fi
 
-      - name: Import SWA into state (idempotent)
+      - name: Import Static Web App into state (idempotent)
         working-directory: ${{ inputs.tf_dir }}
         env:
           RG:  ${{ inputs.rg_name }}
@@ -162,14 +156,23 @@ jobs:
         run: |
           set -euo pipefail
           if az staticwebapp show -n "$SWA" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
-            echo "SWA exists -> importing"
             terraform import -no-color azurerm_static_web_app.swa \
               "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.Web/staticSites/${SWA}" || true
-          else
-            echo "SWA not found, skipping import"
           fi
 
-      # -------------------------
+      # -------- NEW: Container App import --------
+      - name: Import Container App into state (idempotent)
+        working-directory: ${{ inputs.tf_dir }}
+        env:
+          RG:  ${{ inputs.rg_name }}
+          APP: ${{ inputs.app_name }}
+        run: |
+          set -euo pipefail
+          if az containerapp show -g "$RG" -n "$APP" --query name -o tsv >/dev/null 2>&1; then
+            terraform import -no-color azurerm_container_app.api \
+              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${APP}" || true
+          fi
+      # -------------------------------------------
 
       - name: Terraform Plan
         working-directory: ${{ inputs.tf_dir }}
@@ -185,17 +188,11 @@ jobs:
         run: |
           set -euo pipefail
           OUT_JSON="$(terraform output -json)"
-
           api_url="$(jq -r '.api_url.value // empty' <<<"$OUT_JSON")"
           api_hostname="$(jq -r '.api_hostname.value // empty' <<<"$OUT_JSON")"
           acr_login_server="$(jq -r '.acr_login_server.value // empty' <<<"$OUT_JSON")"
           swa_token="$(jq -r '.swa_token.value // empty' <<<"$OUT_JSON")"
-
-          # mask secrets
-          if [ -n "$swa_token" ]; then
-            echo "::add-mask::$swa_token"
-          fi
-
+          if [ -n "$swa_token" ]; then echo "::add-mask::$swa_token"; fi
           {
             echo "api_url=$api_url"
             echo "api_hostname=$api_hostname"
