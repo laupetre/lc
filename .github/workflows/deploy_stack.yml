@@ -36,6 +36,7 @@ jobs:
       acr_name: lcacrio
       law_name: lc-swa-rg-law
       swa_name: lc-swa-web
+      app_name: lc-swa-api 
     secrets:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
