@@ -39,9 +39,10 @@ on:
       swa_name:
         required: true
         type: string
-      app_name:              # <-- NEW
+      app_name:
         required: true
         type: string
+
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -98,7 +99,7 @@ jobs:
             -backend-config="key=${{ inputs.backend_key }}"
 
       # -------------------------
-      # Idempotent imports (guarded)
+      # Idempotent imports (extension-free; guarded)
       # -------------------------
 
       - name: Import Resource Group into state (idempotent)
@@ -107,9 +108,11 @@ jobs:
           RG: ${{ inputs.rg_name }}
         run: |
           set -euo pipefail
-          if az group show -n "$RG" --query name -o tsv >/dev/null 2>&1; then
-            terraform import -no-color azurerm_resource_group.rg \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}" || true
+          if ! terraform state list | grep -q '^azurerm_resource_group\.rg$'; then
+            if az group show -n "$RG" --query id -o tsv >/dev/null 2>&1; then
+              terraform import -no-color azurerm_resource_group.rg \
+                "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}" || true
+            fi
           fi
 
       - name: Import ACR into state (idempotent)
@@ -119,9 +122,12 @@ jobs:
           ACR: ${{ inputs.acr_name }}
         run: |
           set -euo pipefail
-          if az acr show -n "$ACR" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
-            terraform import -no-color azurerm_container_registry.acr \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.ContainerRegistry/registries/${ACR}" || true
+          if ! terraform state list | grep -q '^azurerm_container_registry\.acr$'; then
+            if ID=$(az resource show -g "$RG" -n "$ACR" \
+                  --resource-type Microsoft.ContainerRegistry/registries \
+                  --query id -o tsv 2>/dev/null); then
+              terraform import -no-color azurerm_container_registry.acr "$ID" || true
+            fi
           fi
 
       - name: Import Log Analytics into state (idempotent)
@@ -131,9 +137,12 @@ jobs:
           LAW: ${{ inputs.law_name }}
         run: |
           set -euo pipefail
-          if az monitor log-analytics workspace show -n "$LAW" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
-            terraform import -no-color azurerm_log_analytics_workspace.law \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.OperationalInsights/workspaces/${LAW}" || true
+          if ! terraform state list | grep -q '^azurerm_log_analytics_workspace\.law$'; then
+            if ID=$(az resource show -g "$RG" -n "$LAW" \
+                  --resource-type Microsoft.OperationalInsights/workspaces \
+                  --query id -o tsv 2>/dev/null); then
+              terraform import -no-color azurerm_log_analytics_workspace.law "$ID" || true
+            fi
           fi
 
       - name: Import ACA Environment into state (idempotent)
@@ -143,9 +152,12 @@ jobs:
           ENV_NAME: ${{ inputs.env_name }}
         run: |
           set -euo pipefail
-          if az containerapp env show -g "$RG" -n "$ENV_NAME" --query name -o tsv >/dev/null 2>&1; then
-            terraform import -no-color azurerm_container_app_environment.env \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/managedEnvironments/${ENV_NAME}" || true
+          if ! terraform state list | grep -q '^azurerm_container_app_environment\.env$'; then
+            if ID=$(az resource show -g "$RG" -n "$ENV_NAME" \
+                  --resource-type Microsoft.App/managedEnvironments \
+                  --query id -o tsv 2>/dev/null); then
+              terraform import -no-color azurerm_container_app_environment.env "$ID" || true
+            fi
           fi
 
       - name: Import Static Web App into state (idempotent)
@@ -155,12 +167,14 @@ jobs:
           SWA: ${{ inputs.swa_name }}
         run: |
           set -euo pipefail
-          if az staticwebapp show -n "$SWA" -g "$RG" --query name -o tsv >/dev/null 2>&1; then
-            terraform import -no-color azurerm_static_web_app.swa \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.Web/staticSites/${SWA}" || true
+          if ! terraform state list | grep -q '^azurerm_static_web_app\.swa$'; then
+            if ID=$(az resource show -g "$RG" -n "$SWA" \
+                  --resource-type Microsoft.Web/staticSites \
+                  --query id -o tsv 2>/dev/null); then
+              terraform import -no-color azurerm_static_web_app.swa "$ID" || true
+            fi
           fi
 
-      # -------- NEW: Container App import --------
       - name: Import Container App into state (idempotent)
         working-directory: ${{ inputs.tf_dir }}
         env:
@@ -168,11 +182,13 @@ jobs:
           APP: ${{ inputs.app_name }}
         run: |
           set -euo pipefail
-          if az containerapp show -g "$RG" -n "$APP" --query name -o tsv >/dev/null 2>&1; then
-            terraform import -no-color azurerm_container_app.api \
-              "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.App/containerApps/${APP}" || true
+          if ! terraform state list | grep -q '^azurerm_container_app\.api$'; then
+            if ID=$(az resource show -g "$RG" -n "$APP" \
+                  --resource-type Microsoft.App/containerApps \
+                  --query id -o tsv 2>/dev/null); then
+              terraform import -no-color azurerm_container_app.api "$ID" || true
+            fi
           fi
-      # -------------------------------------------
 
       - name: Terraform Plan
         working-directory: ${{ inputs.tf_dir }}
