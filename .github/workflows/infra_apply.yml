@@ -1,48 +1,40 @@
-name: Infra Apply (reusable)
+name: Infra Apply
 
 on:
   workflow_call:
     inputs:
       tf_dir:
-        description: 'Path to the Terraform root directory'
-        required: false
         type: string
-        default: infra
-
-      # Backend (tfstate) settings
-      backend_rg:
+        description: Path to the Terraform root (e.g. infra)
         required: true
-        type: string
-      backend_sa:
-        required: true
-        type: string
-      backend_container:
-        required: true
-        type: string
-      backend_key:
-        required: true
-        type: string
-
-      # Infra resource names (used for idempotent imports)
       rg_name:
-        required: true
         type: string
-      env_name:
+        description: Azure Resource Group name (e.g. lc-swa-rg)
         required: true
-        type: string
-      acr_name:
-        required: true
-        type: string
-      law_name:
-        required: true
-        type: string
-      swa_name:
-        required: true
-        type: string
       app_name:
-        required: true
         type: string
-
+        description: Container App name (e.g. lc-swa-api)
+        required: true
+      location:
+        type: string
+        description: Azure region for new resources (e.g. eastus2)
+        required: true
+      tfstate_rg:
+        type: string
+        description: Resource Group where the tfstate storage account lives (e.g. tfstate-rg)
+        required: true
+      tfstate_sa:
+        type: string
+        description: Storage Account name for tfstate (e.g. tfstatelaupetrelc)
+        required: true
+      tfstate_container:
+        type: string
+        description: Blob container for tfstate (e.g. tfstate)
+        required: true
+      tfstate_key:
+        type: string
+        description: Blob name for tfstate (e.g. prod.terraform.tfstate)
+        required: true
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -50,168 +42,96 @@ on:
         required: true
       AZURE_SUBSCRIPTION_ID:
         required: true
-
-permissions:
-  id-token: write
-  contents: read
+      AZURE_CLIENT_SECRET:
+        required: true
 
 jobs:
-  plan_apply:
+  apply:
+    name: Terraform Apply (with safe imports)
     runs-on: ubuntu-latest
     env:
-      TF_IN_AUTOMATION: "true"
-      ARM_USE_OIDC: "true"
       ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
       ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET:   ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      # Backend config
+      TFSTATE_RG:         ${{ inputs.tfstate_rg }}
+      TFSTATE_SA:         ${{ inputs.tfstate_sa }}
+      TFSTATE_CONTAINER:  ${{ inputs.tfstate_container }}
+      TFSTATE_KEY:        ${{ inputs.tfstate_key }}
+
+      # Infra inputs
+      RG_NAME:            ${{ inputs.rg_name }}
+      APP_NAME:           ${{ inputs.app_name }}
+      LOCATION:           ${{ inputs.location }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure login (OIDC)
+      - name: Azure login (Service Principal)
         uses: azure/login@v2
         with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          client-id:     ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
 
-      - name: Select subscription
-        run: az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-
-      - name: Setup Terraform
+      - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: false
-
-      - name: Terraform fmt (write to avoid exit code 3)
-        working-directory: ${{ inputs.tf_dir }}
-        run: terraform fmt -recursive
+          terraform_version: 1.7.5
 
       - name: Terraform Init (azurerm backend)
         working-directory: ${{ inputs.tf_dir }}
         run: |
           set -euo pipefail
-          terraform init -input=false \
-            -backend-config="resource_group_name=${{ inputs.backend_rg }}" \
-            -backend-config="storage_account_name=${{ inputs.backend_sa }}" \
-            -backend-config="container_name=${{ inputs.backend_container }}" \
-            -backend-config="key=${{ inputs.backend_key }}"
+          terraform init \
+            -input=false \
+            -backend-config="resource_group_name=${TFSTATE_RG}" \
+            -backend-config="storage_account_name=${TFSTATE_SA}" \
+            -backend-config="container_name=${TFSTATE_CONTAINER}" \
+            -backend-config="key=${TFSTATE_KEY}"
 
-      # -------------------------
-      # Idempotent imports (extension-free; guarded)
-      # -------------------------
+      ######################################################################
+      # Idempotent imports for existing resources we might already have
+      ######################################################################
 
       - name: Import Resource Group into state (idempotent)
         working-directory: ${{ inputs.tf_dir }}
-        env:
-          RG: ${{ inputs.rg_name }}
         run: |
           set -euo pipefail
-          if ! terraform state list | grep -q '^azurerm_resource_group\.rg$'; then
-            if az group show -n "$RG" --query id -o tsv >/dev/null 2>&1; then
-              terraform import -no-color azurerm_resource_group.rg \
-                "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG}" || true
+          if az group show -n "${RG_NAME}" >/dev/null 2>&1; then
+            terraform import -no-color azurerm_resource_group.rg "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}" || true
+          fi
+
+      - name: Import Container Registry into state (idempotent)
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          set -euo pipefail
+          ACR_NAME="$(terraform output -raw acr_name 2>/dev/null || true)"
+          if [ -z "${ACR_NAME}" ]; then
+            # Fall back to querying by tag or naming convention if your TF doesn't output this.
+            # If your TF has a fixed name in variables, you can also read it with:
+            # ACR_NAME="$(terraform console <<< 'var.acr_name' 2>/dev/null | tr -d '\r')"
+            ACR_NAME="$(az acr list --resource-group "${RG_NAME}" --query "[0].name" -o tsv 2>/dev/null || true)"
+          fi
+
+          if [ -n "${ACR_NAME}" ]; then
+            ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG_NAME}" --query id -o tsv 2>/dev/null || true)"
+            if [ -n "${ACR_ID}" ]; then
+              terraform import -no-color azurerm_container_registry.acr "${ACR_ID}" || true
             fi
           fi
 
-      - name: Import ACR into state (idempotent)
+      - name: Import Log Analytics Workspace into state (idempotent)
         working-directory: ${{ inputs.tf_dir }}
-        env:
-          RG:  ${{ inputs.rg_name }}
-          ACR: ${{ inputs.acr_name }}
         run: |
           set -euo pipefail
-          if ! terraform state list | grep -q '^azurerm_container_registry\.acr$'; then
-            if ID=$(az resource show -g "$RG" -n "$ACR" \
-                  --resource-type Microsoft.ContainerRegistry/registries \
-                  --query id -o tsv 2>/dev/null); then
-              terraform import -no-color azurerm_container_registry.acr "$ID" || true
-            fi
+          LAW_NAME="$(terraform output -raw law_name 2>/dev/null || true)"
+          if [ -z "${LAW_NAME}" ]; then
+            LAW_NAME="$(az monitor log-analytics workspace list -g "${RG_NAME}" --query "[0].name" -o tsv 2>/dev/null || true)"
           fi
 
-      - name: Import Log Analytics into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
-        env:
-          RG:  ${{ inputs.rg_name }}
-          LAW: ${{ inputs.law_name }}
-        run: |
-          set -euo pipefail
-          if ! terraform state list | grep -q '^azurerm_log_analytics_workspace\.law$'; then
-            if ID=$(az resource show -g "$RG" -n "$LAW" \
-                  --resource-type Microsoft.OperationalInsights/workspaces \
-                  --query id -o tsv 2>/dev/null); then
-              terraform import -no-color azurerm_log_analytics_workspace.law "$ID" || true
-            fi
-          fi
-
-      - name: Import ACA Environment into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
-        env:
-          RG:       ${{ inputs.rg_name }}
-          ENV_NAME: ${{ inputs.env_name }}
-        run: |
-          set -euo pipefail
-          if ! terraform state list | grep -q '^azurerm_container_app_environment\.env$'; then
-            if ID=$(az resource show -g "$RG" -n "$ENV_NAME" \
-                  --resource-type Microsoft.App/managedEnvironments \
-                  --query id -o tsv 2>/dev/null); then
-              terraform import -no-color azurerm_container_app_environment.env "$ID" || true
-            fi
-          fi
-
-      - name: Import Static Web App into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
-        env:
-          RG:  ${{ inputs.rg_name }}
-          SWA: ${{ inputs.swa_name }}
-        run: |
-          set -euo pipefail
-          if ! terraform state list | grep -q '^azurerm_static_web_app\.swa$'; then
-            if ID=$(az resource show -g "$RG" -n "$SWA" \
-                  --resource-type Microsoft.Web/staticSites \
-                  --query id -o tsv 2>/dev/null); then
-              terraform import -no-color azurerm_static_web_app.swa "$ID" || true
-            fi
-          fi
-
-      - name: Import Container App into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
-        env:
-          RG:  ${{ inputs.rg_name }}
-          APP: ${{ inputs.app_name }}
-        run: |
-          set -euo pipefail
-          if ! terraform state list | grep -q '^azurerm_container_app\.api$'; then
-            if ID=$(az resource show -g "$RG" -n "$APP" \
-                  --resource-type Microsoft.App/containerApps \
-                  --query id -o tsv 2>/dev/null); then
-              terraform import -no-color azurerm_container_app.api "$ID" || true
-            fi
-          fi
-
-      - name: Terraform Plan
-        working-directory: ${{ inputs.tf_dir }}
-        run: terraform plan -input=false -out=tfplan
-
-      - name: Terraform Apply
-        working-directory: ${{ inputs.tf_dir }}
-        run: terraform apply -input=false -auto-approve tfplan
-
-      - name: Expose infra outputs to caller
-        id: expose
-        working-directory: ${{ inputs.tf_dir }}
-        run: |
-          set -euo pipefail
-          OUT_JSON="$(terraform output -json)"
-          api_url="$(jq -r '.api_url.value // empty' <<<"$OUT_JSON")"
-          api_hostname="$(jq -r '.api_hostname.value // empty' <<<"$OUT_JSON")"
-          acr_login_server="$(jq -r '.acr_login_server.value // empty' <<<"$OUT_JSON")"
-          swa_token="$(jq -r '.swa_token.value // empty' <<<"$OUT_JSON")"
-          if [ -n "$swa_token" ]; then echo "::add-mask::$swa_token"; fi
-          {
-            echo "api_url=$api_url"
-            echo "api_hostname=$api_hostname"
-            echo "acr_login_server=$acr_login_server"
-            echo "swa_token=$swa_token"
-          } >> "$GITHUB_OUTPUT"
+          if [ -n "${LAW_NAME}" ];
