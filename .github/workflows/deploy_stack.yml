@@ -1,58 +1,61 @@
-name: Deploy full stack (infra → api → swa)
+name: Deploy Stack
 
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - "infra/**"
-      - "api/**"
-      - "web/**"
-      - ".github/workflows/**"
   workflow_dispatch:
-
-concurrency:
-  group: prod-deploy-refs/heads/main
-  cancel-in-progress: false
-
-permissions:
-  id-token: write
-  contents: read
+    inputs:
+      location:
+        description: "Azure region for core resources"
+        required: true
+        default: eastus
+      swa_location:
+        description: "Azure region for Static Web Apps"
+        required: true
+        default: eastus2
+      resource_group_name:
+        description: "Resource group name"
+        required: true
+        default: lc-swa-rg
+      acr_name:
+        description: "Azure Container Registry name"
+        required: true
+        default: lcacrio
+      containerapps_env_name:
+        description: "Container Apps Environment name"
+        required: true
+        default: lc-swa-env
+      containerapp_name:
+        description: "Container App name"
+        required: true
+        default: lc-swa-api
+      container_port:
+        description: "Container port"
+        required: true
+        default: "8080"
+      image_name:
+        description: "Image repo/name (no registry)"
+        required: true
+        default: lc-swa-api
+      image_tag:
+        description: "Image tag"
+        required: true
+        default: latest
+      bootstrap_image:
+        description: "Bootstrap image for first deploy (if needed)"
+        required: true
+        default: mcr.microsoft.com/azuredocs/aci-helloworld:latest
 
 jobs:
-  infra:
-    uses: ./.github/workflows/infra_apply.yml
+  deploy:
+    uses: ./.github/workflows/deploy_env.yml
     with:
-      tf_dir: infra
-
-      # tfstate backend
-      backend_rg: tfstate-rg
-      backend_sa: tfstatelaupetrelc
-      backend_container: tfstate
-      backend_key: prod.terraform.tfstate
-
-      # infra names (used for guarded imports)
-      rg_name: lc-swa-rg
-      env_name: lc-swa-env
-      acr_name: lcacrio
-      law_name: lc-swa-rg-law
-      swa_name: lc-swa-web
-      app_name: lc-swa-api 
-    secrets:
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-  # (Optional) downstream jobs can consume outputs from "infra" if needed, e.g.:
-  # api:
-  #   needs: infra
-  #   uses: ./.github/workflows/api_deploy.yml
-  #   with:
-  #     acr_login_server: ${{ needs.infra.outputs.acr_login_server }}
-  #   secrets: inherit
-  #
-  # web:
-  #   needs: [infra, api]
-  #   uses: ./.github/workflows/swa_deploy.yml
-  #   with:
-  #     swa_token: ${{ needs.infra.outputs.swa_token }}
-  #   secrets: inherit
+      location: ${{ github.event.inputs.location }}
+      swa_location: ${{ github.event.inputs.swa_location }}
+      resource_group_name: ${{ github.event.inputs.resource_group_name }}
+      acr_name: ${{ github.event.inputs.acr_name }}
+      containerapps_env_name: ${{ github.event.inputs.containerapps_env_name }}
+      containerapp_name: ${{ github.event.inputs.containerapp_name }}
+      container_port: ${{ github.event.inputs.container_port }}
+      image_name: ${{ github.event.inputs.image_name }}
+      image_tag: ${{ github.event.inputs.image_tag }}
+      bootstrap_image: ${{ github.event.inputs.bootstrap_image }}
+    secrets: inherit

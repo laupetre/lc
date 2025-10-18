@@ -1,137 +1,144 @@
-name: Infra Apply
+name: Reusable Deploy Env
 
 on:
   workflow_call:
     inputs:
-      tf_dir:
-        type: string
-        description: Path to the Terraform root (e.g. infra)
-        required: true
-      rg_name:
-        type: string
-        description: Azure Resource Group name (e.g. lc-swa-rg)
-        required: true
-      app_name:
-        type: string
-        description: Container App name (e.g. lc-swa-api)
-        required: true
       location:
-        type: string
-        description: Azure region for new resources (e.g. eastus2)
         required: true
-      tfstate_rg:
         type: string
-        description: Resource Group where the tfstate storage account lives (e.g. tfstate-rg)
+      swa_location:
         required: true
-      tfstate_sa:
         type: string
-        description: Storage Account name for tfstate (e.g. tfstatelaupetrelc)
+      resource_group_name:
         required: true
-      tfstate_container:
         type: string
-        description: Blob container for tfstate (e.g. tfstate)
+      acr_name:
         required: true
-      tfstate_key:
         type: string
-        description: Blob name for tfstate (e.g. prod.terraform.tfstate)
+      containerapps_env_name:
         required: true
+        type: string
+      containerapp_name:
+        required: true
+        type: string
+      container_port:
+        required: true
+        type: string
+      image_name:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+      bootstrap_image:
+        required: true
+        type: string
     secrets:
-      AZURE_CLIENT_ID:
-        required: true
-      AZURE_TENANT_ID:
+      AZURE_CREDENTIALS:
         required: true
       AZURE_SUBSCRIPTION_ID:
         required: true
-      AZURE_CLIENT_SECRET:
-        required: true
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
-  apply:
-    name: Terraform Apply (with safe imports)
+  deploy:
     runs-on: ubuntu-latest
     env:
-      ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+      TF_IN_AUTOMATION: "true"
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ""
+      ARM_TENANT_ID: ""
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_CLIENT_SECRET:   ${{ secrets.AZURE_CLIENT_SECRET }}
-
-      # Backend config
-      TFSTATE_RG:         ${{ inputs.tfstate_rg }}
-      TFSTATE_SA:         ${{ inputs.tfstate_sa }}
-      TFSTATE_CONTAINER:  ${{ inputs.tfstate_container }}
-      TFSTATE_KEY:        ${{ inputs.tfstate_key }}
-
-      # Infra inputs
-      RG_NAME:            ${{ inputs.rg_name }}
-      APP_NAME:           ${{ inputs.app_name }}
-      LOCATION:           ${{ inputs.location }}
-
+      LOCATION: ${{ inputs.location }}
+      SWA_LOCATION: ${{ inputs.swa_location }}
+      RG_NAME: ${{ inputs.resource_group_name }}
+      ACR_NAME: ${{ inputs.acr_name }}
+      ACR_LOGIN_SERVER: ${{ inputs.acr_name }}.azurecr.io
+      CA_ENV_NAME: ${{ inputs.containerapps_env_name }}
+      CA_NAME: ${{ inputs.containerapp_name }}
+      CONTAINER_PORT: ${{ inputs.container_port }}
+      IMAGE_NAME: ${{ inputs.image_name }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      BOOTSTRAP_IMAGE: ${{ inputs.bootstrap_image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure login (Service Principal)
+      # Login to Azure (supports classic secret JSON)
+      - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id:     ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:     ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          enable-AzPSSession: false
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.7.5
+          terraform_version: 1.9.8
 
-      - name: Terraform Init (azurerm backend)
-        working-directory: ${{ inputs.tf_dir }}
+      - name: Terraform Init
+        run: terraform init
+
+      # Idempotent imports for pre-existing resources that caused your errors
+      - name: Import existing Azure resources if missing in state
+        shell: bash
         run: |
           set -euo pipefail
-          terraform init \
-            -input=false \
-            -backend-config="resource_group_name=${TFSTATE_RG}" \
-            -backend-config="storage_account_name=${TFSTATE_SA}" \
-            -backend-config="container_name=${TFSTATE_CONTAINER}" \
-            -backend-config="key=${TFSTATE_KEY}"
+          sub="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          rg="${RG_NAME}"
+          acr="${ACR_NAME}"
+          law="${RG_NAME}-law"
+          swa="lc-swa-web"
 
-      ######################################################################
-      # Idempotent imports for existing resources we might already have
-      ######################################################################
+          # ACR
+          terraform state show azurerm_container_registry.acr >/dev/null 2>&1 || \
+            terraform import azurerm_container_registry.acr \
+            "/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.ContainerRegistry/registries/${acr}"
 
-      - name: Import Resource Group into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
+          # Log Analytics Workspace
+          terraform state show azurerm_log_analytics_workspace.law >/dev/null 2>&1 || \
+            terraform import azurerm_log_analytics_workspace.law \
+            "/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.OperationalInsights/workspaces/${law}"
+
+          # Static Web App
+          terraform state show azurerm_static_web_app.swa >/dev/null 2>&1 || \
+            terraform import azurerm_static_web_app.swa \
+            "/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Web/staticSites/${swa}"
+
+      - name: Azure CLI - Ensure ACR exists (optional guard)
         run: |
-          set -euo pipefail
-          if az group show -n "${RG_NAME}" >/dev/null 2>&1; then
-            terraform import -no-color azurerm_resource_group.rg "/subscriptions/${ARM_SUBSCRIPTION_ID}/resourceGroups/${RG_NAME}" || true
-          fi
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          az acr show -n "${ACR_NAME}" -g "${RG_NAME}" >/dev/null
 
-      - name: Import Container Registry into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
+      - name: Azure ACR Login
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ env.ACR_LOGIN_SERVER }}
+          # docker-login action with azure/login OIDC uses az acr login under the hood
+
+      - name: Build & Push image to ACR
         run: |
-          set -euo pipefail
-          ACR_NAME="$(terraform output -raw acr_name 2>/dev/null || true)"
-          if [ -z "${ACR_NAME}" ]; then
-            # Fall back to querying by tag or naming convention if your TF doesn't output this.
-            # If your TF has a fixed name in variables, you can also read it with:
-            # ACR_NAME="$(terraform console <<< 'var.acr_name' 2>/dev/null | tr -d '\r')"
-            ACR_NAME="$(az acr list --resource-group "${RG_NAME}" --query "[0].name" -o tsv 2>/dev/null || true)"
-          fi
+          IMAGE="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}"
+          docker build -t "${IMAGE}" .
+          docker push "${IMAGE}"
 
-          if [ -n "${ACR_NAME}" ]; then
-            ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG_NAME}" --query id -o tsv 2>/dev/null || true)"
-            if [ -n "${ACR_ID}" ]; then
-              terraform import -no-color azurerm_container_registry.acr "${ACR_ID}" || true
-            fi
-          fi
-
-      - name: Import Log Analytics Workspace into state (idempotent)
-        working-directory: ${{ inputs.tf_dir }}
+      - name: Terraform Plan
         run: |
-          set -euo pipefail
-          LAW_NAME="$(terraform output -raw law_name 2>/dev/null || true)"
-          if [ -z "${LAW_NAME}" ]; then
-            LAW_NAME="$(az monitor log-analytics workspace list -g "${RG_NAME}" --query "[0].name" -o tsv 2>/dev/null || true)"
-          fi
+          terraform plan \
+            -var="location=${LOCATION}" \
+            -var="swa_location=${SWA_LOCATION}" \
+            -var="resource_group_name=${RG_NAME}" \
+            -var="acr_name=${ACR_NAME}" \
+            -var="containerapps_env_name=${CA_ENV_NAME}" \
+            -var="containerapp_name=${CA_NAME}" \
+            -var="container_port=${CONTAINER_PORT}" \
+            -var="image_name=${IMAGE_NAME}" \
+            -var="image_tag=${IMAGE_TAG}" \
+            -var="bootstrap_image=${BOOTSTRAP_IMAGE}" \
+            -out=tfplan
 
-          if [ -n "${LAW_NAME}" ];
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve tfplan
