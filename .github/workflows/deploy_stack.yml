@@ -46,7 +46,7 @@ on:
 
 jobs:
   deploy:
-    uses: ./.github/workflows/deploy_env.yml
+    uses: ./.github/workflows/infra_apply.yml
     with:
       location: ${{ github.event.inputs.location }}
       swa_location: ${{ github.event.inputs.swa_location }}
