@@ -1,143 +1,148 @@
-############################################
-# Resource Group
-############################################
+locals {
+  tags = { project = var.project, env = "prod", iac = "terraform" }
+}
+
 resource "azurerm_resource_group" "rg" {
   name     = var.resource_group_name
   location = var.location
+  tags     = local.tags
 }
 
-############################################
-# ACR
-############################################
 resource "azurerm_container_registry" "acr" {
   name                = var.acr_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   sku                 = "Basic"
   admin_enabled       = false
+  tags                = local.tags
 }
 
-############################################
-# Log Analytics
-############################################
-resource "azurerm_log_analytics_workspace" "law" {
-  name                = var.law_name
-  location            = azurerm_resource_group.rg.location
+resource "azurerm_static_web_app" "swa" {
+  name                = var.swa_name
   resource_group_name = azurerm_resource_group.rg.name
-  sku                 = "PerGB2018"
-  retention_in_days   = 30
+  location            = azurerm_resource_group.rg.location
+  sku_tier            = "Free"
+  tags                = local.tags
 }
 
-############################################
-# User-Assigned Managed Identity (for ACR pull)
-############################################
-resource "azurerm_user_assigned_identity" "pull_mi" {
+resource "azurerm_container_app_environment" "env" {
+  name                = var.containerapp_env_name
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  tags                = local.tags
+}
+
+resource "azurerm_user_assigned_identity" "api" {
   name                = "${var.containerapp_name}-mi"
-  location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  tags                = local.tags
 }
 
-# Grant MI permission to pull images from ACR
-resource "azurerm_role_assignment" "mi_acr_pull" {
+resource "azurerm_role_assignment" "acr_pull" {
   scope                = azurerm_container_registry.acr.id
   role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.pull_mi.principal_id
+  principal_id         = azurerm_user_assigned_identity.api.principal_id
 }
 
-############################################
-# Container Apps Environment (ACA)
-############################################
-resource "azurerm_container_app_environment" "env" {
-  name                       = var.containerapps_env_name
-  location                   = azurerm_resource_group.rg.location
-  resource_group_name        = azurerm_resource_group.rg.name
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.law.id
-
-  timeouts {
-    create = "60m"
-    update = "60m"
-  }
-}
-
-############################################
-# Container App (API)
-############################################
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
   resource_group_name          = azurerm_resource_group.rg.name
   container_app_environment_id = azurerm_container_app_environment.env.id
-  revision_mode                = "Single"
 
-  # Pull image from ACR using the user-assigned MI
   identity {
     type         = "UserAssigned"
-    identity_ids = [azurerm_user_assigned_identity.pull_mi.id]
+    identity_ids = [azurerm_user_assigned_identity.api.id]
   }
 
   registry {
     server   = azurerm_container_registry.acr.login_server
-    identity = azurerm_user_assigned_identity.pull_mi.id
+    identity = azurerm_user_assigned_identity.api.id
   }
 
   ingress {
     external_enabled = true
-    target_port      = var.container_port
+    target_port      = 8000
     transport        = "auto"
-
-    traffic_weight {
-      latest_revision = true
-      percentage      = 100
-    }
   }
 
   template {
     container {
       name   = "api"
-      image  = "${azurerm_container_registry.acr.login_server}/${var.image_name}:${var.image_tag}"
-      cpu    = 0.5
-      memory = "1.0Gi"
+      image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 
-      env {
-        name  = "OPENAI_MODEL"
-        value = var.openai_model
-      }
-
-      dynamic "env" {
-        for_each = var.openai_api_key == null || var.openai_api_key == "" ? [] : [1]
-        content {
-          name  = "OPENAI_API_KEY"
-          value = var.openai_api_key
-        }
-      }
+      env { name = "OPENAI_MODEL"   value = var.openai_model }
+      env { name = "ALLOWED_ORIGIN" value = "https://${azurerm_static_web_app.swa.default_host_name}" }
+      env { name = "OPENAI_API_KEY" secret_name = "openai-api-key" }
     }
+
+    min_replicas = 1
+    max_replicas = 3
   }
 
-  tags = {
-    app = var.containerapp_name
-  }
+  secret { name = "openai-api-key"; value = var.openai_api_key }
 
-  timeouts {
-    create = "60m"
-    update = "60m"
-  }
+  tags = local.tags
+
+  depends_on = [ azurerm_role_assignment.acr_pull ]
 }
 
-############################################
-# Static Web App (must be in supported region)
-############################################
-resource "azurerm_static_web_app" "swa" {
-  name                = var.swa_name
-  resource_group_name = azurerm_resource_group.rg.name
-  location            = var.location
-  sku_tier            = "Free"
-  sku_size            = "Free"
+resource "azuread_application" "gha" {
+  display_name = "${var.project}-gha-oidc"
 }
 
-# Fetch SWA deployment token
-resource "azapi_resource_action" "swa_secrets" {
-  type                   = "Microsoft.Web/staticSites@2022-03-01"
-  resource_id            = azurerm_static_web_app.swa.id
-  action                 = "listSecrets"
-  method                 = "POST"
-  response_export_values = ["properties"]
+resource "azuread_service_principal" "gha" {
+  application_id = azuread_application.gha.application_id
+}
+
+resource "azurerm_role_assignment" "gha_contrib" {
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "Contributor"
+  principal_id         = azuread_service_principal.gha.object_id
+}
+
+resource "azuread_application_federated_identity_credential" "gha_fic_branch" {
+  application_object_id = azuread_application.gha.object_id
+  display_name          = "github-${var.github_org}-${var.github_repo}-${var.github_branch}"
+  audiences             = ["api://AzureADTokenExchange"]
+  issuer                = "https://token.actions.githubusercontent.com"
+  subject               = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
+}
+
+resource "local_file" "aca_fqdn_file" {
+  content  = azurerm_container_app.api.latest_revision_fqdn
+  filename = "${path.module}/.aca_fqdn.txt"
+}
+
+resource "null_resource" "post_apply_note" {
+  triggers = {
+    aca_fqdn = azurerm_container_app.api.latest_revision_fqdn
+    swa_host = azurerm_static_web_app.swa.default_host_name
+    acr_srv  = azurerm_container_registry.acr.login_server
+    clientid = azuread_service_principal.gha.application_id
+    tenant   = data.azurerm_client_config.current.tenant_id
+    sub      = data.azurerm_client_config.current.subscription_id
+  }
+
+  provisioner "local-exec" {
+    command = <<EOT
+echo "=== Deploy Info ==="
+echo "ACA FQDN: ${self.triggers.aca_fqdn}"
+echo "SWA Host: ${self.triggers.swa_host}"
+echo "ACR:      ${self.triggers.acr_srv}"
+echo "GH OIDC Client ID: ${self.triggers.clientid}"
+echo "Tenant:   ${self.triggers.tenant}"
+echo "Sub:      ${self.triggers.sub}"
+echo ""
+echo "Repo secrets to set:"
+echo "  AZURE_SUBSCRIPTION_ID=${self.triggers.sub}"
+echo "  AZURE_TENANT_ID=${self.triggers.tenant}"
+echo "  AZURE_CLIENT_ID=${self.triggers.clientid}"
+echo "  OPENAI_API_KEY=<your key>"
+echo "  SWA_DEPLOYMENT_TOKEN=<from SWA resource>"
+EOT
+    interpreter = ["bash", "-c"]
+  }
+
+  depends_on = [ local_file.aca_fqdn_file ]
 }

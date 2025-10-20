@@ -1,27 +1,10 @@
 terraform {
   required_version = ">= 1.6.0"
-
   required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 3.113"
-    }
-    azapi = {
-      source  = "azure/azapi"
-      version = "~> 1.13"
-    }
-  }
-
-  backend "azurerm" {}
-}
-
-provider "azurerm" {
-  features {
-    resource_group {
-      # Allow RG deletion even if Azure still reports nested resources.
-      prevent_deletion_if_contains_resources = false
-    }
+    azurerm = { source = "hashicorp/azurerm", version = ">= 3.114.0" }
+    azuread = { source = "hashicorp/azuread", version = ">= 2.53.1" }
+    random  = { source = "hashicorp/random",  version = ">= 3.6.0" }
+    null    = { source = "hashicorp/null",    version = ">= 3.2.2" }
+    local   = { source = "hashicorp/local",   version = ">= 2.5.1" }
   }
 }
-
-provider "azapi" {}

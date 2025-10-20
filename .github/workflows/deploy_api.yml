@@ -1,0 +1,67 @@
+name: Deploy API (Azure Container Apps)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # REQUIRED for Azure OIDC
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Read deploy.json
+        id: cfg
+        run: |
+          RG=$(jq -r .resource_group deploy.json)
+          ACR=$(jq -r .acr_name deploy.json)
+          ACA=$(jq -r .aca_name deploy.json)
+          SWA=$(jq -r .swa_name deploy.json)
+          echo "RG=$RG"   >> $GITHUB_OUTPUT
+          echo "ACR=$ACR" >> $GITHUB_OUTPUT
+          echo "ACA=$ACA" >> $GITHUB_OUTPUT
+          echo "SWA=$SWA" >> $GITHUB_OUTPUT
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve SWA default hostname (from Azure)
+        id: swa
+        run: |
+          HN=$(az staticwebapp show -n "${{ steps.cfg.outputs.SWA }}" -g "${{ steps.cfg.outputs.RG }}" --query defaultHostname -o tsv)
+          echo "HOSTNAME=$HN" >> $GITHUB_OUTPUT
+
+      - name: ACR Login
+        run: az acr login --name ${{ steps.cfg.outputs.ACR }}
+
+      - name: Build & Push image
+        run: |
+          IMG="${{ steps.cfg.outputs.ACR }}.azurecr.io/langchain-chat-api:${{ github.sha }}"
+          docker build -t "$IMG" .
+          docker push "$IMG"
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Deploy to Azure Container Apps
+        run: |
+          IMG="${{ steps.cfg.outputs.ACR }}.azurecr.io/langchain-chat-api:${{ github.sha }}"
+          az containerapp update \
+            --name "${{ steps.cfg.outputs.ACA }}" \
+            --resource-group "${{ steps.cfg.outputs.RG }}" \
+            --image "$IMG" \
+            --set-env-vars OPENAI_MODEL=gpt-4o-mini \
+                           ALLOWED_ORIGIN=https://${{ steps.swa.outputs.HOSTNAME }} \
+            --secret-env-vars OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}

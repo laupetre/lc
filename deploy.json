@@ -1,0 +1,8 @@
+{
+  "resource_group": "lc-swa-rg",
+  "location": "eastus",
+  "acr_name": "lcacrio",
+  "containerapps_env": "lc-swa-env",
+  "aca_name": "lc-swa-api",
+  "swa_name": "lc-swa-frontend"
+}
