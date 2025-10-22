@@ -27,11 +27,12 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Read deploy.json
+      - name: Read deploy.json (from repo root)
         id: cfg
         run: |
-          RG=$(jq -r .resource_group deploy.json)
-          LOCATION=$(jq -r .location deploy.json)
+          # workflow defaults set working-directory: infra, so deploy.json lives at ../deploy.json
+          RG=$(jq -r .resource_group ../deploy.json)
+          LOCATION=$(jq -r .location ../deploy.json)
           echo "RG=$RG" >> $GITHUB_OUTPUT
           echo "LOCATION=$LOCATION" >> $GITHUB_OUTPUT
 
