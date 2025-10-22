@@ -113,36 +113,25 @@ resource "local_file" "aca_fqdn_file" {
   content  = azurerm_container_app.api.latest_revision_fqdn
   filename = "${path.module}/.aca_fqdn.txt"
 }
+resource "local_file" "deploy_info" {
+  content = <<EOT
+=== Deploy Info ===
+ACA FQDN: ${azurerm_container_app.api.latest_revision_fqdn}
+SWA Host: ${azurerm_static_web_app.swa.default_host_name}
+ACR:      ${azurerm_container_registry.acr.login_server}
+GH OIDC Client ID: ${azuread_service_principal.gha.application_id}
+Tenant:   ${data.azurerm_client_config.current.tenant_id}
+Sub:      ${data.azurerm_client_config.current.subscription_id}
 
-resource "null_resource" "post_apply_note" {
-  triggers = {
-    aca_fqdn = azurerm_container_app.api.latest_revision_fqdn
-    swa_host = azurerm_static_web_app.swa.default_host_name
-    acr_srv  = azurerm_container_registry.acr.login_server
-    clientid = azuread_service_principal.gha.application_id
-    tenant   = data.azurerm_client_config.current.tenant_id
-    sub      = data.azurerm_client_config.current.subscription_id
-  }
-
-  provisioner "local-exec" {
-    command = <<EOT
-echo "=== Deploy Info ==="
-echo "ACA FQDN: ${self.triggers.aca_fqdn}"
-echo "SWA Host: ${self.triggers.swa_host}"
-echo "ACR:      ${self.triggers.acr_srv}"
-echo "GH OIDC Client ID: ${self.triggers.clientid}"
-echo "Tenant:   ${self.triggers.tenant}"
-echo "Sub:      ${self.triggers.sub}"
-echo ""
-echo "Repo secrets to set:"
-echo "  AZURE_SUBSCRIPTION_ID=${self.triggers.sub}"
-echo "  AZURE_TENANT_ID=${self.triggers.tenant}"
-echo "  AZURE_CLIENT_ID=${self.triggers.clientid}"
-echo "  OPENAI_API_KEY=<your key>"
-echo "  SWA_DEPLOYMENT_TOKEN=<from SWA resource>"
+Repo secrets to set:
+  AZURE_SUBSCRIPTION_ID=${data.azurerm_client_config.current.subscription_id}
+  AZURE_TENANT_ID=${data.azurerm_client_config.current.tenant_id}
+  AZURE_CLIENT_ID=${azuread_service_principal.gha.application_id}
+  OPENAI_API_KEY=<your key>
+  SWA_DEPLOYMENT_TOKEN=<from SWA resource>
 EOT
-    interpreter = ["bash", "-c"]
-  }
+
+  filename = "${path.module}/deploy_info.txt"
 
   depends_on = [ local_file.aca_fqdn_file ]
 }
