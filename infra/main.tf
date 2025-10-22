@@ -59,6 +59,7 @@ resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
   resource_group_name          = azurerm_resource_group.rg.name
   container_app_environment_id = azurerm_container_app_environment.env.id
+  revision_mode                = "Single"
 
   identity {
     type         = "UserAssigned"
@@ -74,12 +75,19 @@ resource "azurerm_container_app" "api" {
     external_enabled = true
     target_port      = 8000
     transport        = "auto"
+    
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
   }
 
   template {
     container {
       name   = "api"
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+      cpu    = 0.25
+      memory = "0.5Gi"
 
       env {
         name  = "OPENAI_MODEL"
@@ -114,7 +122,7 @@ resource "azuread_application" "gha" {
 }
 
 resource "azuread_service_principal" "gha" {
-  application_id = azuread_application.gha.application_id
+  client_id = azuread_application.gha.client_id
 }
 
 resource "azurerm_role_assignment" "gha_contrib" {
@@ -124,11 +132,11 @@ resource "azurerm_role_assignment" "gha_contrib" {
 }
 
 resource "azuread_application_federated_identity_credential" "gha_fic_branch" {
-  application_object_id = azuread_application.gha.object_id
-  display_name          = "github-${var.github_org}-${var.github_repo}-${var.github_branch}"
-  audiences             = ["api://AzureADTokenExchange"]
-  issuer                = "https://token.actions.githubusercontent.com"
-  subject               = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
+  application_id = azuread_application.gha.id
+  display_name   = "github-${var.github_org}-${var.github_repo}-${var.github_branch}"
+  audiences      = ["api://AzureADTokenExchange"]
+  issuer         = "https://token.actions.githubusercontent.com"
+  subject        = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
 }
 
 resource "local_file" "aca_fqdn_file" {
