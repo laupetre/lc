@@ -35,12 +35,16 @@ jobs:
           echo "RG=$RG" >> $GITHUB_OUTPUT
           echo "LOCATION=$LOCATION" >> $GITHUB_OUTPUT
 
-      - name: Azure Login (OIDC)
+      - name: Azure Login (OIDC or service principal)
         uses: azure/login@v2
         with:
+          # Prefer OIDC (no secret) if the Azure AD application + federated credential already exist.
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # If you don't have OIDC set up yet, provide a service principal secret as a repo secret
+          # named AZURE_CLIENT_SECRET. The action will use service-principal auth when client-secret is present.
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
       - name: Initialize Terraform
         run: terraform init -input=false -no-color
@@ -54,19 +58,22 @@ jobs:
           terraform plan -input=false -no-color -out=tfplan \
             -var "resource_group_name=${{ steps.cfg.outputs.RG }}" \
             -var "location=${{ steps.cfg.outputs.LOCATION }}"
+
       - name: Upload plan
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
-          path: infra/tfplan
+          path: tfplan
 
       - name: Apply Terraform (auto-approve)
-        if: ${{ secrets.TF_AUTO_APPROVE == 'true' }}
-        run: terraform apply -input=false -no-color tfplan
+        # This workflow will perform the apply in CI. Ensure the repo has the necessary Azure secrets or OIDC
+        # configuration so the action can authenticate. If you prefer manual apply, remove this step or guard it
+        # with a secret check (TF_AUTO_APPROVE).
+        run: |
+          terraform apply -input=false -no-color tfplan
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Output deploy info
-        if: ${{ secrets.TF_AUTO_APPROVE == 'true' }}
         run: |
           cat deploy_info.txt || true

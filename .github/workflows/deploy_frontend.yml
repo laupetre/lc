@@ -10,6 +10,10 @@ on:
       - ".github/workflows/deploy_frontend.yml"
       - "deploy.json"
   workflow_dispatch:
+  workflow_run:
+    workflows: [ ".github/workflows/terraform_infra.yml" ]
+    types:
+      - completed
 
 jobs:
   build-and-deploy:
