@@ -1,12 +1,4 @@
-# Terraform variables - Update these values for your deployment
-
-# Required: Your OpenAI API key
-openai_api_key = "your-openai-api-key-here"
-
-# Required: GitHub repository information for OIDC authentication
-github_org    = "your-github-username-or-org"
-github_repo   = "langChain"
-github_branch = "main"
+# Terraform variables - GitHub Actions will provide most values via command line
 
 # Optional: Override default values if needed
 project               = "lc-swa"
@@ -17,3 +9,9 @@ openai_model          = "gpt-4o-mini"
 containerapp_env_name = "lc-swa-env"
 containerapp_name     = "lc-swa-api"
 swa_name              = "lc-swa-frontend"
+
+# Note: These are provided by GitHub Actions:
+# - openai_api_key (from secrets)
+# - github_org (from github.repository_owner)
+# - github_repo (from github.event.repository.name)
+# - github_branch (from github.ref_name)

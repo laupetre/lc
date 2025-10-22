@@ -63,7 +63,8 @@ jobs:
             -var "location=${{ steps.cfg.outputs.LOCATION }}" \
             -var "github_org=${{ github.repository_owner }}" \
             -var "github_repo=${{ github.event.repository.name }}" \
-            -var "github_branch=${{ github.ref_name }}"
+            -var "github_branch=${{ github.ref_name }}" \
+            -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}"
 
       - name: Upload plan
         uses: actions/upload-artifact@v4
@@ -77,8 +78,6 @@ jobs:
         # with a secret check (TF_AUTO_APPROVE).
         run: |
           terraform apply -input=false -no-color tfplan
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Output deploy info
         run: |
