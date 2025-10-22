@@ -25,11 +25,21 @@ resource "azurerm_static_web_app" "swa" {
   tags                = local.tags
 }
 
-resource "azurerm_container_app_environment" "env" {
-  name                = var.containerapp_env_name
+resource "azurerm_log_analytics_workspace" "env" {
+  name                = "${var.containerapp_env_name}-logs"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
   tags                = local.tags
+}
+
+resource "azurerm_container_app_environment" "env" {
+  name                       = var.containerapp_env_name
+  resource_group_name        = azurerm_resource_group.rg.name
+  location                   = azurerm_resource_group.rg.location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.env.id
+  tags                       = local.tags
 }
 
 resource "azurerm_user_assigned_identity" "api" {
@@ -71,16 +81,28 @@ resource "azurerm_container_app" "api" {
       name   = "api"
       image  = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 
-      env { name = "OPENAI_MODEL"   value = var.openai_model }
-      env { name = "ALLOWED_ORIGIN" value = "https://${azurerm_static_web_app.swa.default_host_name}" }
-      env { name = "OPENAI_API_KEY" secret_name = "openai-api-key" }
+      env {
+        name  = "OPENAI_MODEL"
+        value = var.openai_model
+      }
+      env {
+        name  = "ALLOWED_ORIGIN"
+        value = "https://${azurerm_static_web_app.swa.default_host_name}"
+      }
+      env {
+        name       = "OPENAI_API_KEY"
+        secret_name = "openai-api-key"
+      }
     }
 
     min_replicas = 1
     max_replicas = 3
   }
 
-  secret { name = "openai-api-key"; value = var.openai_api_key }
+  secret {
+    name  = "openai-api-key"
+    value = var.openai_api_key
+  }
 
   tags = local.tags
 
