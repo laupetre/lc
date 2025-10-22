@@ -38,10 +38,21 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Check resource group exists
+        run: |
+          if ! az group show -n "${{ steps.cfg.outputs.RG }}" >/dev/null 2>&1; then
+            echo "Resource group '${{ steps.cfg.outputs.RG }}' not found. Run the Terraform infra workflow (terraform_infra.yml) or create the RG before deploying the API."
+            exit 1
+          fi
+
       - name: Resolve SWA default hostname (from Azure)
         id: swa
         run: |
-          HN=$(az staticwebapp show -n "${{ steps.cfg.outputs.SWA }}" -g "${{ steps.cfg.outputs.RG }}" --query defaultHostname -o tsv)
+          HN=$(az staticwebapp show -n "${{ steps.cfg.outputs.SWA }}" -g "${{ steps.cfg.outputs.RG }}" --query defaultHostname -o tsv || true)
+          if [ -z "$HN" ]; then
+            echo "Could not resolve Static Web App hostname for '${{ steps.cfg.outputs.SWA }}' in resource group '${{ steps.cfg.outputs.RG }}'. Ensure the SWA exists or run the infra workflow."
+            exit 1
+          fi
           echo "HOSTNAME=$HN" >> $GITHUB_OUTPUT
 
       - name: ACR Login

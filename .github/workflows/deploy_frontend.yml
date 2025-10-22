@@ -40,10 +40,21 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Check resource group exists
+        run: |
+          if ! az group show -n "${{ steps.cfg.outputs.RG }}" >/dev/null 2>&1; then
+            echo "Resource group '${{ steps.cfg.outputs.RG }}' not found. Run the Terraform infra workflow (terraform_infra.yml) or create the RG before deploying the frontend."
+            exit 1
+          fi
+
       - name: Resolve ACA FQDN (from Azure)
         id: aca
         run: |
-          FQDN=$(az containerapp show -n "${{ steps.cfg.outputs.ACA }}" -g "${{ steps.cfg.outputs.RG }}" --query properties.configuration.ingress.fqdn -o tsv)
+          FQDN=$(az containerapp show -n "${{ steps.cfg.outputs.ACA }}" -g "${{ steps.cfg.outputs.RG }}" --query properties.configuration.ingress.fqdn -o tsv || true)
+          if [ -z "$FQDN" ]; then
+            echo "Could not resolve container app FQDN for '${{ steps.cfg.outputs.ACA }}' in resource group '${{ steps.cfg.outputs.RG }}'. Ensure the Container App exists or run the infra workflow."
+            exit 1
+          fi
           echo "FQDN=$FQDN" >> $GITHUB_OUTPUT
 
       - name: Bake config.js (point to ACA)
