@@ -1,14 +1,14 @@
-# Example terraform.tfvars - copy to terraform.tfvars and fill in sensitive values
+# Terraform variables - Update these values for your deployment
 
 # Required: Your OpenAI API key
-openai_api_key = "your-openai-key"
+openai_api_key = "your-openai-api-key-here"
 
 # Required: GitHub repository information for OIDC authentication
-github_org    = "your-github-org"
-github_repo   = "your-github-repo"
+github_org    = "your-github-username-or-org"
+github_repo   = "langChain"
 github_branch = "main"
 
-# Optional: Override default values
+# Optional: Override default values if needed
 project               = "lc-swa"
 location              = "eastus"
 resource_group_name   = "lc-swa-rg"

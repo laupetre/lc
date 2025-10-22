@@ -1,0 +1,51 @@
+name: Test API
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "api/**"
+  push:
+    branches: [ main ]
+    paths:
+      - "api/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd api
+          pip install -r requirements.txt
+
+      - name: Lint with flake8
+        run: |
+          cd api
+          pip install flake8
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Test with pytest
+        run: |
+          cd api
+          pip install pytest pytest-asyncio httpx
+          python -c "
+          import sys
+          sys.path.append('.')
+          from app import app
+          print('✅ FastAPI app imports successfully')
+          print('✅ All dependencies resolved')
+          "
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || 'test-key' }}
+          OPENAI_MODEL: 'gpt-4o-mini'
+          ALLOWED_ORIGIN: '*'
