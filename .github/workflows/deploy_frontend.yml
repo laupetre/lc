@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
 name: Deploy Frontend (Azure Static Web Apps)
 
 on:
@@ -40,9 +42,9 @@ jobs:
       - name: Azure Login (OIDC) - for hostname discovery
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: "${{ secrets.AZURE_CLIENT_ID }}"
+          tenant-id: "${{ secrets.AZURE_TENANT_ID }}"
+          subscription-id: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Check resource group exists
         run: |
@@ -71,8 +73,8 @@ jobs:
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          azure_static_web_apps_api_token: "${{ secrets.SWA_DEPLOYMENT_TOKEN }}"
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
           action: "upload"
           app_location: "web/"
           output_location: "web/"

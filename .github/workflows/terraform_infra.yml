@@ -1,3 +1,5 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+
 name: Terraform Infra
 
 on:
@@ -40,12 +42,9 @@ jobs:
         uses: azure/login@v2
         with:
           # Prefer OIDC (no secret) if the Azure AD application + federated credential already exist.
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          # If you don't have OIDC set up yet, provide a service principal secret as a repo secret
-          # named AZURE_CLIENT_SECRET. The action will use service-principal auth when client-secret is present.
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          client-id: "${{ secrets.AZURE_CLIENT_ID }}"
+          tenant-id: "${{ secrets.AZURE_TENANT_ID }}"
+          subscription-id: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
       - name: Initialize Terraform
         run: terraform init -input=false -no-color
