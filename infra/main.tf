@@ -1,5 +1,9 @@
 locals {
-  tags = { project = var.project, env = "prod", iac = "terraform" }
+  tags = {
+    project = var.project
+    env     = "prod"
+    iac     = "terraform"
+  }
 }
 
 resource "azurerm_resource_group" "rg" {
