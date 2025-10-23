@@ -79,7 +79,7 @@ resource "azurerm_container_app" "api" {
     external_enabled = true
     target_port      = 8000
     transport        = "auto"
-    
+
     traffic_weight {
       percentage      = 100
       latest_revision = true
