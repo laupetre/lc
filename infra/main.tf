@@ -149,14 +149,14 @@ resource "local_file" "deploy_info" {
 ACA FQDN: ${azurerm_container_app.api.latest_revision_fqdn}
 SWA Host: ${azurerm_static_web_app.swa.default_host_name}
 ACR:      ${azurerm_container_registry.acr.login_server}
-GH OIDC Client ID: ${azuread_service_principal.gha.application_id}
+GH OIDC Client ID: ${azuread_service_principal.gha.client_id}
 Tenant:   ${data.azurerm_client_config.current.tenant_id}
 Sub:      ${data.azurerm_client_config.current.subscription_id}
 
 Repo secrets to set:
   AZURE_SUBSCRIPTION_ID=${data.azurerm_client_config.current.subscription_id}
   AZURE_TENANT_ID=${data.azurerm_client_config.current.tenant_id}
-  AZURE_CLIENT_ID=${azuread_service_principal.gha.application_id}
+  AZURE_CLIENT_ID=${azuread_service_principal.gha.client_id}
   OPENAI_API_KEY=<your key>
   SWA_DEPLOYMENT_TOKEN=<from SWA resource>
 EOT
