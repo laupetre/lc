@@ -118,7 +118,7 @@ resource "azurerm_container_app" "api" {
 
   tags = local.tags
 
-  depends_on = [ azurerm_role_assignment.acr_pull ]
+  depends_on = [azurerm_role_assignment.acr_pull]
 }
 
 resource "azuread_application" "gha" {
@@ -167,5 +167,5 @@ EOT
 
   filename = "${path.module}/deploy_info.txt"
 
-  depends_on = [ local_file.aca_fqdn_file ]
+  depends_on = [local_file.aca_fqdn_file]
 }
