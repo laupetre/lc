@@ -147,6 +147,7 @@ resource "local_file" "aca_fqdn_file" {
   content  = azurerm_container_app.api.latest_revision_fqdn
   filename = "${path.module}/.aca_fqdn.txt"
 }
+
 resource "local_file" "deploy_info" {
   content = <<EOT
 === Deploy Info ===
