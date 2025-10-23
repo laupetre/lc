@@ -97,12 +97,14 @@ resource "azurerm_container_app" "api" {
         name  = "OPENAI_MODEL"
         value = var.openai_model
       }
+
       env {
         name  = "ALLOWED_ORIGIN"
         value = "https://${azurerm_static_web_app.swa.default_host_name}"
       }
+
       env {
-        name       = "OPENAI_API_KEY"
+        name        = "OPENAI_API_KEY"
         secret_name = "openai-api-key"
       }
     }
