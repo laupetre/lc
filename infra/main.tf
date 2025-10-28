@@ -57,15 +57,12 @@ resource "azurerm_user_assigned_identity" "api" {
   tags                = local.tags
 }
 
-resource "azurerm_role_assignment" "acr_pull" {
-  scope                = azurerm_container_registry.acr.id
-  role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.api.principal_id
-
-  lifecycle {
-    ignore_changes = all
-  }
-}
+# Role assignment will be created manually
+# resource "azurerm_role_assignment" "acr_pull" {
+#   scope                = azurerm_container_registry.acr.id
+#   role_definition_name = "AcrPull
+#   principal_id         = azurerm_user_assigned_identity.api.principal_id
+# }
 
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
@@ -128,46 +125,39 @@ resource "azurerm_container_app" "api" {
 
   tags = local.tags
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  # depends_on = [azurerm_role_assignment.acr_pull]
 }
 
-resource "azuread_application" "gha" {
-  display_name = "${var.project}-gha-oidc"
-  owners       = [data.azurerm_client_config.current.object_id]
+# Azure AD resources will be created manually
+# resource "azuread_application" "gha" {
+#   display_name = "${var.project}-gha-oidc"
+#   owners       = [data.azurerm_client_config.current.object_id]
+# }
 
-  lifecycle {
-    ignore_changes = all
-  }
-}
+# resource "azuread_service_principal" "gha" {
+#   client_id = azuread_application.gha.client_id
+#   owners    = [data.azurerm_client_config.current.object_id]
+# }
 
-resource "azuread_service_principal" "gha" {
-  client_id = azuread_application.gha.client_id
-  owners    = [data.azurerm_client_config.current.object_id]
+# resource "azurerm_role_assignment" "gha_contrib" {
+#   scope                = azurerm_resource_group.rg.id
+#   role_definition_name = "Contributor"
+#   principal_id         = azuread_service_principal.gha.object_id
+# }
 
-  lifecycle {
-    ignore_changes = all
-  }
-}
+# resource "azurerm_role_assignment" "gha_user_admin" {
+#   scope                = azurerm_resource_group.rg.id
+#   role_definition_name = "User Access Administrator"
+#   principal_id         = azuread_service_principal.gha.object_id
+# }
 
-resource "azurerm_role_assignment" "gha_contrib" {
-  scope                = azurerm_resource_group.rg.id
-  role_definition_name = "Contributor"
-  principal_id         = azuread_service_principal.gha.object_id
-}
-
-resource "azurerm_role_assignment" "gha_user_admin" {
-  scope                = azurerm_resource_group.rg.id
-  role_definition_name = "User Access Administrator"
-  principal_id         = azuread_service_principal.gha.object_id
-}
-
-resource "azuread_application_federated_identity_credential" "gha_fic_branch" {
-  application_id = azuread_application.gha.id
-  display_name   = "github-${var.github_org}-${var.github_repo}-${var.github_branch}"
-  audiences      = ["api://AzureADTokenExchange"]
-  issuer         = "https://token.actions.githubusercontent.com"
-  subject        = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
-}
+# resource "azuread_application_federated_identity_credential" "gha_fic_branch" {
+#   application_id = azuread_application.gha.id
+#   display_name   = "github-${var.github_org}-${var.github_repo}-${var.github_branch}"
+#   audiences      = ["api://AzureADTokenExchange"]
+#   issuer         = "https://token.actions.githubusercontent.com"
+#   subject        = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
+# }
 
 resource "local_file" "aca_fqdn_file" {
   content  = azurerm_container_app.api.latest_revision_fqdn
@@ -180,14 +170,14 @@ resource "local_file" "deploy_info" {
 ACA FQDN: ${azurerm_container_app.api.latest_revision_fqdn}
 SWA Host: ${azurerm_static_web_app.swa.default_host_name}
 ACR:      ${azurerm_container_registry.acr.login_server}
-GH OIDC Client ID: ${azuread_service_principal.gha.client_id}
+GH OIDC Client ID: <create manually>
 Tenant:   ${data.azurerm_client_config.current.tenant_id}
 Sub:      ${data.azurerm_client_config.current.subscription_id}
 
 Repo secrets to set:
   AZURE_SUBSCRIPTION_ID=${data.azurerm_client_config.current.subscription_id}
   AZURE_TENANT_ID=${data.azurerm_client_config.current.tenant_id}
-  AZURE_CLIENT_ID=${azuread_service_principal.gha.client_id}
+  AZURE_CLIENT_ID=<create manually>
   OPENAI_API_KEY=<your key>
   SWA_DEPLOYMENT_TOKEN=<from SWA resource>
 EOT
