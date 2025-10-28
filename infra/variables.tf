@@ -55,3 +55,9 @@ variable "swa_name" {
   type    = string
   default = "lc-swa-frontend"
 }
+
+variable "use_existing_resources" {
+  type        = bool
+  default     = false
+  description = "If true, will try to import existing resources instead of creating new ones"
+}
