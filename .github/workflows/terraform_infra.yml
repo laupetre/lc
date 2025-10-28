@@ -71,16 +71,12 @@ jobs:
             -var "github_branch=${{ github.ref_name }}" \
             -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}"
 
-      - name: Upload plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: tfplan
-          path: tfplan
-
       - name: Apply Terraform (auto-approve)
-        # This workflow will perform the apply in CI. Ensure the repo has the necessary Azure secrets or OIDC
-        # configuration so the action can authenticate. If you prefer manual apply, remove this step or guard it
-        # with a secret check (TF_AUTO_APPROVE).
+        env:
+          ARM_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
+          ARM_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
+          ARM_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          ARM_USE_OIDC: "true"
         run: |
           terraform apply -input=false -no-color tfplan
 
