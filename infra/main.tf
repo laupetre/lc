@@ -12,7 +12,7 @@ resource "azurerm_resource_group" "rg" {
   tags     = local.tags
 
   lifecycle {
-    ignore_changes = [location]
+    create_before_destroy = true
   }
 }
 
@@ -28,7 +28,7 @@ resource "azurerm_container_registry" "acr" {
 resource "azurerm_static_web_app" "swa" {
   name                = var.swa_name
   resource_group_name = azurerm_resource_group.rg.name
-  location            = azurerm_resource_group.rg.location
+  location            = "East US 2"
   sku_tier            = "Free"
   tags                = local.tags
 }
@@ -61,6 +61,10 @@ resource "azurerm_role_assignment" "acr_pull" {
   scope                = azurerm_container_registry.acr.id
   role_definition_name = "AcrPull"
   principal_id         = azurerm_user_assigned_identity.api.principal_id
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 resource "azurerm_container_app" "api" {
@@ -130,11 +134,19 @@ resource "azurerm_container_app" "api" {
 resource "azuread_application" "gha" {
   display_name = "${var.project}-gha-oidc"
   owners       = [data.azurerm_client_config.current.object_id]
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 resource "azuread_service_principal" "gha" {
   client_id = azuread_application.gha.client_id
   owners    = [data.azurerm_client_config.current.object_id]
+
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 resource "azurerm_role_assignment" "gha_contrib" {
