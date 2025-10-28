@@ -14,9 +14,9 @@ output "swa_default_hostname" {
   value = azurerm_static_web_app.swa.default_host_name
 }
 
-output "github_client_id" {
-  value = azuread_service_principal.gha.client_id
-}
+# output "github_client_id" {
+#   value = azuread_service_principal.gha.client_id
+# }
 
 output "azure_tenant_id" {
   value = data.azurerm_client_config.current.tenant_id
