@@ -125,15 +125,23 @@ resource "azurerm_container_app" "api" {
 
 resource "azuread_application" "gha" {
   display_name = "${var.project}-gha-oidc"
+  owners       = [data.azurerm_client_config.current.object_id]
 }
 
 resource "azuread_service_principal" "gha" {
   client_id = azuread_application.gha.client_id
+  owners    = [data.azurerm_client_config.current.object_id]
 }
 
 resource "azurerm_role_assignment" "gha_contrib" {
   scope                = azurerm_resource_group.rg.id
   role_definition_name = "Contributor"
+  principal_id         = azuread_service_principal.gha.object_id
+}
+
+resource "azurerm_role_assignment" "gha_user_admin" {
+  scope                = azurerm_resource_group.rg.id
+  role_definition_name = "User Access Administrator"
   principal_id         = azuread_service_principal.gha.object_id
 }
 

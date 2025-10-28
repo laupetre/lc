@@ -2,7 +2,7 @@
 
 # Optional: Override default values if needed
 project               = "lc-swa"
-location              = "eastus"
+location              = "eastus2"
 resource_group_name   = "lc-swa-rg"
 acr_name              = "lcacrio"
 openai_model          = "gpt-4o-mini"
