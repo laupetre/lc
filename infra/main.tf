@@ -57,8 +57,6 @@ resource "azurerm_user_assigned_identity" "api" {
   tags                = local.tags
 }
 
-# Role assignment not needed when using admin credentials
-
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
   resource_group_name          = azurerm_resource_group.rg.name
