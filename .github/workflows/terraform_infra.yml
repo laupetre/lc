@@ -137,41 +137,7 @@ jobs:
         run: |
           echo "=== Deploy Info ==="
           terraform output || true
-
-      - name: Deploy Frontend to Static Web App
-        if: success()
-        env:
-          ARM_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
-          ARM_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
-          ARM_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
-          ARM_USE_OIDC: "true"
-        run: |
-          cd ..
-          sudo apt-get update && sudo apt-get install -y jq || true
-          RG=$(jq -r .resource_group deploy.json)
-          ACA=$(jq -r .aca_name deploy.json)
-          
-          # Resolve Container App FQDN
-          FQDN=$(az containerapp show -n "$ACA" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv)
-          if [ -z "$FQDN" ]; then
-            echo "Could not resolve container app FQDN"
-            exit 1
-          fi
-          
-          echo "API FQDN: $FQDN"
-          
-          # Create config.js with API endpoint
-          API_BASE="https://$FQDN"
-          sed "s|__API_BASE__|$API_BASE|g" web/config.template.js > web/config.js
-          echo "Created config.js with API_BASE: $API_BASE"
-
-      - name: Upload Frontend to Static Web App
-        if: success()
-        continue-on-error: true
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: "${{ secrets.AZURE_SWA_TOKEN }}"
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          action: "upload"
-          app_location: "web/"
-          output_location: "web/"
+          echo ""
+          echo "Next steps:"
+          echo "1. The Deploy Frontend workflow will run automatically after this workflow completes"
+          echo "2. Or manually trigger it from the Actions tab"
