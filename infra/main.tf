@@ -57,12 +57,12 @@ resource "azurerm_user_assigned_identity" "api" {
   tags                = local.tags
 }
 
-# Role assignment will be created manually
-# resource "azurerm_role_assignment" "acr_pull" {
-#   scope                = azurerm_container_registry.acr.id
-#   role_definition_name = "AcrPull
-#   principal_id         = azurerm_user_assigned_identity.api.principal_id
-# }
+# Role assignment - will be created manually after first deployment
+resource "azurerm_role_assignment" "acr_pull" {
+  scope                = azurerm_container_registry.acr.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.api.principal_id
+}
 
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
@@ -125,7 +125,7 @@ resource "azurerm_container_app" "api" {
 
   tags = local.tags
 
-  # depends_on = [azurerm_role_assignment.acr_pull]
+  depends_on = [azurerm_role_assignment.acr_pull]
 }
 
 # Azure AD resources will be created manually
