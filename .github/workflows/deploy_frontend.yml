@@ -3,14 +3,6 @@
 name: Deploy Frontend (Azure Static Web Apps)
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "web/index.html"
-      - "web/style.css"
-      - "web/config.template.js"
-      - ".github/workflows/deploy_frontend.yml"
-      - "deploy.json"
   workflow_dispatch:
   workflow_run:
     workflows: [ "Deploy API (Azure Container Apps)", "Terraform Infra" ]
