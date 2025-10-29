@@ -13,13 +13,14 @@ on:
       - "deploy.json"
   workflow_dispatch:
   workflow_run:
-    workflows: [ ".github/workflows/terraform_infra.yml" ]
+    workflows: [ "Terraform Infra" ]
     types:
       - completed
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
