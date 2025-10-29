@@ -65,7 +65,11 @@ jobs:
           API_BASE="https://${{ steps.aca.outputs.FQDN }}"
           sed "s|__API_BASE__|$API_BASE|g" web/config.template.js > web/config.js
           echo "Using API_BASE: $API_BASE"
+          echo "Files in web/ directory:"
           ls -la web/
+          echo ""
+          echo "Config.js content:"
+          cat web/config.js
 
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
@@ -74,7 +78,8 @@ jobs:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           action: "upload"
           app_location: "web/"
-          output_location: "web/"
+          output_location: "." 
+          skip_app_build: true
         continue-on-error: true
         env:
           NODE_VERSION: 18
