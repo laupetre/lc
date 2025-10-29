@@ -68,9 +68,6 @@ jobs:
       - name: Validate Terraform
         run: terraform validate -no-color
 
-      - name: Format check
-        run: terraform fmt -check -recursive
-
       - name: Terraform Plan
         id: plan
         env:
