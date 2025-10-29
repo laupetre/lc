@@ -82,6 +82,4 @@ jobs:
             --name "${{ steps.cfg.outputs.ACA }}" \
             --resource-group "${{ steps.cfg.outputs.RG }}" \
             --image "$IMG" \
-            --set-env-vars OPENAI_MODEL=gpt-4o-mini \
-                           ALLOWED_ORIGIN=https://${{ steps.swa.outputs.HOSTNAME }} \
-            --secret-env-vars OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+            --set-env-vars "OPENAI_MODEL=gpt-4o-mini" "ALLOWED_ORIGIN=https://${{ steps.swa.outputs.HOSTNAME }}"
