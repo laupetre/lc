@@ -5,7 +5,7 @@ name: Deploy Frontend (Azure Static Web Apps)
 on:
   workflow_dispatch:
   workflow_run:
-    workflows: [ "Deploy API (Azure Container Apps)", "Terraform Infra" ]
+    workflows: [ "Deploy API (Azure Container Apps)" ]
     types:
       - completed
 
@@ -16,7 +16,7 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
