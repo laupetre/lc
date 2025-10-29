@@ -98,6 +98,11 @@ jobs:
             terraform import $TF_VARS azurerm_container_app_environment.env /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.App/managedEnvironments/$ENV || true
           fi
           
+          # Import Container App (if exists)
+          if az containerapp show -n "$ACA" -g "$RG" >/dev/null 2>&1; then
+            terraform import $TF_VARS azurerm_container_app.api /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.App/containerApps/$ACA || true
+          fi
+          
           echo "Finished importing existing resources"
 
       - name: Validate Terraform
