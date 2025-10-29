@@ -135,7 +135,8 @@ jobs:
 
       - name: Output deploy info
         run: |
-          cat deploy_info.txt || true
+          echo "=== Deploy Info ==="
+          terraform output || true
 
       - name: Deploy Frontend to Static Web App
         if: success()

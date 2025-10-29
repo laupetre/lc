@@ -157,30 +157,4 @@ resource "azurerm_container_app" "api" {
 #   subject        = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
 # }
 
-resource "local_file" "aca_fqdn_file" {
-  content  = azurerm_container_app.api.latest_revision_fqdn
-  filename = "${path.module}/.aca_fqdn.txt"
-}
-
-resource "local_file" "deploy_info" {
-  content = <<EOT
-=== Deploy Info ===
-ACA FQDN: ${azurerm_container_app.api.latest_revision_fqdn}
-SWA Host: ${azurerm_static_web_app.swa.default_host_name}
-ACR:      ${azurerm_container_registry.acr.login_server}
-GH OIDC Client ID: <create manually>
-Tenant:   ${data.azurerm_client_config.current.tenant_id}
-Sub:      ${data.azurerm_client_config.current.subscription_id}
-
-Repo secrets to set:
-  AZURE_SUBSCRIPTION_ID=${data.azurerm_client_config.current.subscription_id}
-  AZURE_TENANT_ID=${data.azurerm_client_config.current.tenant_id}
-  AZURE_CLIENT_ID=<create manually>
-  OPENAI_API_KEY=<your key>
-  SWA_DEPLOYMENT_TOKEN=<from SWA resource>
-EOT
-
-  filename = "${path.module}/deploy_info.txt"
-
-  depends_on = [local_file.aca_fqdn_file]
-}
+# File resources removed - use Terraform outputs instead
