@@ -70,7 +70,7 @@ jobs:
       - name: Build & Push image
         run: |
           IMG="${{ steps.cfg.outputs.ACR }}.azurecr.io/langchain-chat-api:${{ github.sha }}"
-          docker build -t "$IMG" .
+          docker build -t "$IMG" api/
           docker push "$IMG"
         env:
           DOCKER_BUILDKIT: 1
