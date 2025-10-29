@@ -71,8 +71,8 @@ resource "azurerm_container_app" "api" {
   }
 
   registry {
-    server   = azurerm_container_registry.acr.login_server
-    username = azurerm_container_registry.acr.admin_username
+    server               = azurerm_container_registry.acr.login_server
+    username             = azurerm_container_registry.acr.admin_username
     password_secret_name = "acr-password"
   }
 

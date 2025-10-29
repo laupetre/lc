@@ -46,13 +46,6 @@ jobs:
           tenant-id: "${{ secrets.AZURE_TENANT_ID }}"
           subscription-id: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
 
-      - name: Clean up existing resources (if any)
-        continue-on-error: true
-        run: |
-          # workflow defaults set working-directory: infra, so deploy.json lives at ../deploy.json
-          RG=$(jq -r .resource_group ../deploy.json)
-          az group delete -n "$RG" --yes --no-wait || true
-
       - name: Initialize Terraform
         run: terraform init -input=false -no-color
 
@@ -66,7 +59,11 @@ jobs:
         run: |
           RG=$(jq -r .resource_group ../deploy.json)
           LOCATION=$(jq -r .location ../deploy.json)
-          terraform import -var "resource_group_name=$RG" -var "location=$LOCATION" -var "github_org=${{ github.repository_owner }}" -var "github_repo=${{ github.event.repository.name }}" -var "github_branch=${{ github.ref_name }}" -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}" azurerm_resource_group.rg /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$RG || true
+          if az group show -n "$RG" >/dev/null 2>&1; then
+            terraform import -var "resource_group_name=$RG" -var "location=$LOCATION" -var "github_org=${{ github.repository_owner }}" -var "github_repo=${{ github.event.repository.name }}" -var "github_branch=${{ github.ref_name }}" -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}" azurerm_resource_group.rg /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$RG || true
+          else
+            echo "Resource group $RG does not exist, will be created by Terraform"
+          fi
 
       - name: Validate Terraform
         run: terraform validate -no-color
