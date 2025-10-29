@@ -21,7 +21,7 @@ resource "azurerm_container_registry" "acr" {
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   sku                 = "Basic"
-  admin_enabled       = false
+  admin_enabled       = true  # Enable admin access for simpler authentication
   tags                = local.tags
 }
 
@@ -57,12 +57,7 @@ resource "azurerm_user_assigned_identity" "api" {
   tags                = local.tags
 }
 
-# Role assignment - will be created manually after first deployment
-resource "azurerm_role_assignment" "acr_pull" {
-  scope                = azurerm_container_registry.acr.id
-  role_definition_name = "AcrPull"
-  principal_id         = azurerm_user_assigned_identity.api.principal_id
-}
+# Role assignment not needed when using admin credentials
 
 resource "azurerm_container_app" "api" {
   name                         = var.containerapp_name
@@ -77,7 +72,8 @@ resource "azurerm_container_app" "api" {
 
   registry {
     server   = azurerm_container_registry.acr.login_server
-    identity = azurerm_user_assigned_identity.api.id
+    username = azurerm_container_registry.acr.admin_username
+    password_secret_name = "acr-password"
   }
 
   ingress {
@@ -123,9 +119,12 @@ resource "azurerm_container_app" "api" {
     value = var.openai_api_key
   }
 
-  tags = local.tags
+  secret {
+    name  = "acr-password"
+    value = azurerm_container_registry.acr.admin_password
+  }
 
-  depends_on = [azurerm_role_assignment.acr_pull]
+  tags = local.tags
 }
 
 # Azure AD resources will be created manually
