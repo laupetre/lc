@@ -49,7 +49,7 @@ jobs:
       - name: Initialize Terraform
         run: terraform init -input=false -no-color
 
-      - name: Import existing resource group (if exists)
+      - name: Import existing resources (if exists)
         continue-on-error: true
         env:
           ARM_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
@@ -59,11 +59,46 @@ jobs:
         run: |
           RG=$(jq -r .resource_group ../deploy.json)
           LOCATION=$(jq -r .location ../deploy.json)
+          ACR=$(jq -r .acr_name ../deploy.json)
+          SWA=$(jq -r .swa_name ../deploy.json)
+          ENV=$(jq -r .containerapps_env ../deploy.json)
+          ACA=$(jq -r .aca_name ../deploy.json)
+          SUB_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          
+          # Common terraform import variables
+          TF_VARS="-var resource_group_name=$RG -var location=$LOCATION -var github_org=${{ github.repository_owner }} -var github_repo=${{ github.event.repository.name }} -var github_branch=${{ github.ref_name }} -var openai_api_key=${{ secrets.OPENAI_API_KEY }}"
+          
+          # Import Resource Group
           if az group show -n "$RG" >/dev/null 2>&1; then
-            terraform import -var "resource_group_name=$RG" -var "location=$LOCATION" -var "github_org=${{ github.repository_owner }}" -var "github_repo=${{ github.event.repository.name }}" -var "github_branch=${{ github.ref_name }}" -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}" azurerm_resource_group.rg /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$RG || true
-          else
-            echo "Resource group $RG does not exist, will be created by Terraform"
+            terraform import $TF_VARS azurerm_resource_group.rg /subscriptions/$SUB_ID/resourceGroups/$RG || true
           fi
+          
+          # Import Container Registry
+          if az acr show -n "$ACR" -g "$RG" >/dev/null 2>&1; then
+            terraform import $TF_VARS azurerm_container_registry.acr /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ContainerRegistry/registries/$ACR || true
+          fi
+          
+          # Import Static Web App
+          if az staticwebapp show -n "$SWA" -g "$RG" >/dev/null 2>&1; then
+            terraform import $TF_VARS azurerm_static_web_app.swa /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.Web/staticSites/$SWA || true
+          fi
+          
+          # Import Log Analytics Workspace
+          if az monitor log-analytics workspace show -n "${ENV}-logs" -g "$RG" >/dev/null 2>&1; then
+            terraform import $TF_VARS azurerm_log_analytics_workspace.env /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.OperationalInsights/workspaces/${ENV}-logs || true
+          fi
+          
+          # Import User Assigned Identity
+          if az identity show -n "${ACA}-mi" -g "$RG" >/dev/null 2>&1; then
+            terraform import $TF_VARS azurerm_user_assigned_identity.api /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${ACA}-mi || true
+          fi
+          
+          # Import Container App Environment (if exists)
+          if az containerapp env show -n "$ENV" -g "$RG" >/dev/null 2>&1; then
+            terraform import $TF_VARS azurerm_container_app_environment.env /subscriptions/$SUB_ID/resourceGroups/$RG/providers/Microsoft.App/managedEnvironments/$ENV || true
+          fi
+          
+          echo "Finished importing existing resources"
 
       - name: Validate Terraform
         run: terraform validate -no-color
