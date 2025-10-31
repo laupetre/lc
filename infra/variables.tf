@@ -61,3 +61,24 @@ variable "use_existing_resources" {
   default     = false
   description = "If true, will try to import existing resources instead of creating new ones"
 }
+
+variable "box_client_id" {
+  type        = string
+  default     = ""
+  description = "Box API Client ID (optional)"
+  sensitive   = true
+}
+
+variable "box_client_secret" {
+  type        = string
+  default     = ""
+  description = "Box API Client Secret (optional)"
+  sensitive   = true
+}
+
+variable "box_access_token" {
+  type        = string
+  default     = ""
+  description = "Box API Access Token (optional)"
+  sensitive   = true
+}

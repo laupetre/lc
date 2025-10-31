@@ -122,7 +122,10 @@ jobs:
             -var "github_org=${{ github.repository_owner }}" \
             -var "github_repo=${{ github.event.repository.name }}" \
             -var "github_branch=${{ github.ref_name }}" \
-            -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}"
+            -var "openai_api_key=${{ secrets.OPENAI_API_KEY }}" \
+            -var "box_client_id=${{ secrets.BOX_CLIENT_ID || '' }}" \
+            -var "box_client_secret=${{ secrets.BOX_CLIENT_SECRET || '' }}" \
+            -var "box_access_token=${{ secrets.BOX_ACCESS_TOKEN || '' }}"
 
       - name: Apply Terraform (auto-approve)
         env:

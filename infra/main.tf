@@ -32,6 +32,10 @@ resource "azurerm_static_web_app" "swa" {
   location            = "East US 2"
   sku_tier            = "Free"
   tags                = local.tags
+
+  identity {
+    type = "SystemAssigned"
+  }
 }
 
 resource "azurerm_log_analytics_workspace" "env" {
@@ -123,10 +127,58 @@ resource "azurerm_container_app" "api" {
     value = azurerm_container_registry.acr.admin_password
   }
 
+  # Box integration secrets (optional)
+  secret {
+    name  = "box-client-id"
+    value = var.box_client_id
+  }
+  secret {
+    name  = "box-client-secret"
+    value = var.box_client_secret
+  }
+  secret {
+    name  = "box-access-token"
+    value = var.box_access_token
+  }
+
   tags = local.tags
 }
 
-# Azure AD resources will be created manually
+# Azure AD OAuth app registration for Static Web App authentication
+resource "azuread_application" "swa_oauth" {
+  display_name     = "${var.project}-oauth-app"
+  sign_in_audience = "AzureADMyOrg"
+  
+  web {
+    redirect_uris = [
+      "https://${azurerm_static_web_app.swa.default_host_name}/.auth/login/aad/callback"
+    ]
+  }
+
+  required_resource_access {
+    resource_app_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+    
+    resource_access {
+      id   = "e1fe6dd8-ba31-4d61-89e7-88639da4683d" # User.Read
+      type = "Scope"
+    }
+  }
+
+  owners = [data.azurerm_client_config.current.object_id]
+  
+  tags = local.tags
+}
+
+# Create a password credential (client secret) for the app
+resource "azuread_application_password" "swa_oauth" {
+  application_id = azuread_application.swa_oauth.id
+  display_name   = "Static Web App OAuth Secret"
+  
+  # Set expiration to 1 year from now
+  end_date = timeadd(timestamp(), "8760h")
+}
+
+# Azure AD resources for GitHub Actions OIDC (commented out due to permission issues)
 # resource "azuread_application" "gha" {
 #   display_name = "${var.project}-gha-oidc"
 #   owners       = [data.azurerm_client_config.current.object_id]
@@ -156,5 +208,3 @@ resource "azurerm_container_app" "api" {
 #   issuer         = "https://token.actions.githubusercontent.com"
 #   subject        = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/${var.github_branch}"
 # }
-
-# File resources removed - use Terraform outputs instead

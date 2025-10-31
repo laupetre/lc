@@ -25,3 +25,20 @@ output "azure_tenant_id" {
 output "azure_subscription_id" {
   value = data.azurerm_client_config.current.subscription_id
 }
+
+# OAuth App Registration outputs
+output "oauth_client_id" {
+  value       = azuread_application.swa_oauth.client_id
+  description = "Application (client) ID for Static Web App OAuth authentication"
+}
+
+output "oauth_client_secret" {
+  value       = azuread_application_password.swa_oauth.value
+  sensitive   = true
+  description = "Client secret for Static Web App OAuth authentication - add this to Static Web App configuration as MICROSOFT_CLIENT_SECRET"
+}
+
+output "oauth_redirect_uri" {
+  value       = "https://${azurerm_static_web_app.swa.default_host_name}/.auth/login/aad/callback"
+  description = "OAuth redirect URI configured in the app registration"
+}

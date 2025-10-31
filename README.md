@@ -8,12 +8,14 @@ A full-stack chat application built with LangChain, FastAPI, and Azure services,
 - **Backend**: FastAPI application with LangChain integration deployed to Azure Container Apps
 - **Infrastructure**: Managed with Terraform, including Azure Container Registry, Container Apps, and Static Web Apps
 - **CI/CD**: Automated deployment using GitHub Actions with OIDC authentication
+- **Authentication**: Optional Azure AD OAuth via Static Web Apps (see [OAUTH_SETUP.md](OAUTH_SETUP.md))
 
 ## Prerequisites
 
 1. **Azure Account**: Active Azure subscription
 2. **GitHub Repository**: This code in a GitHub repository
 3. **OpenAI API Key**: Valid OpenAI API key for LangChain integration
+4. **Azure AD App Registration**: For OAuth authentication (optional)
 
 ## Setup Instructions
 
@@ -60,7 +62,99 @@ In your GitHub repository, go to Settings → Secrets and variables → Actions,
 
 3. **Update secrets**: Add the missing secrets from step 2
 
-### 4. Deploy Application
+### 4. Configure OAuth Authentication (Optional)
+
+⚠️ **Important**: OAuth setup requires Azure AD application registration permissions. If your GitHub Actions service principal lacks these permissions, you'll need to create the app registration manually (see manual steps below).
+
+Terraform will automatically create the Azure AD app registration for OAuth if you have the required permissions.
+
+#### Automatic Setup (via Terraform)
+
+After running the Terraform workflow, get your OAuth credentials from the workflow outputs:
+
+1. **Get OAuth Credentials**:
+   - In GitHub Actions workflow output, find:
+     - `oauth_client_id`: Your Application (Client) ID
+     - `oauth_client_secret`: Your client secret (sensitive)
+     - `oauth_redirect_uri`: Already configured in app registration
+
+2. **Configure Static Web App**:
+   - In Azure Portal, go to **"Static Web Apps"**
+   - Click on your Static Web App (e.g., `lc-swa-frontend`)
+   - In the left menu, click **"Configuration"**
+   - Click **"+ Add"** in the "Application settings" section
+   - Add `MICROSOFT_CLIENT_ID` with the value from Terraform output
+   - Click **"+ Add"** again and add `MICROSOFT_CLIENT_SECRET` with the secret value from Terraform output
+   - Click **"Save"** button at the top
+
+#### Manual Setup (if Terraform fails)
+
+If Terraform doesn't have permissions to create app registrations, follow these manual steps:
+
+**Step 1: Create Azure AD App Registration**
+
+1. Go to [portal.azure.com](https://portal.azure.com) → Azure Active Directory → App registrations
+2. Click **"+ New registration"**
+3. Configure:
+   - **Name**: `LangChain Chat App`
+   - **Account types**: Single tenant
+   - **Redirect URI**: `https://YOUR-SWA-URL/.auth/login/aad/callback`
+4. Click **"Register"** and copy the **Application (Client) ID**
+
+**Step 2: Create Client Secret**
+
+1. In your app → Certificates & secrets
+2. Click **"+ New client secret"**
+3. Set expiration and description, click **"Add"**
+4. **IMMEDIATELY copy the Value** (shown only once)
+
+**Step 3: Configure Static Web App**
+
+Add these settings in Static Web App → Configuration:
+- `MICROSOFT_CLIENT_ID` = Your app's client ID
+- `MICROSOFT_CLIENT_SECRET` = Your secret value
+
+### 5. Test Authentication
+
+1. **Visit Your Static Web App**:
+   - Open your browser and navigate to your Static Web App URL
+   - You should see the chat interface with a "Login" button in the top right
+
+2. **Test Login**:
+   - Click the **"Login"** button
+   - You'll be redirected to Microsoft's login page
+   - Sign in with your Azure AD account
+   - You'll be redirected back to your app
+
+3. **Verify Authentication**:
+   - You should now see your name/email in the top right instead of "Login"
+   - The "Login" button should be replaced with a "Logout" button
+   - You can click "Logout" to sign out
+
+#### Troubleshooting OAuth
+
+If authentication doesn't work:
+
+1. **Check Redirect URI**: Ensure it exactly matches:
+   - `https://YOUR-SWA-URL/.auth/login/aad/callback` (no trailing slash)
+   - Must be HTTPS
+
+2. **Check Application Settings**: In Static Web App → Configuration, verify:
+   - `MICROSOFT_CLIENT_ID` is set correctly
+   - `MICROSOFT_CLIENT_SECRET` is set correctly
+   - Both are saved (click "Save" if you see unsaved changes)
+
+3. **Check App Registration**:
+   - Go back to App registrations in Azure AD
+   - Click on your app → Authentication
+   - Verify the redirect URI is listed and correct
+
+4. **Common Issues**:
+   - **"AADSTS50011: The redirect URI...does not match"**: The redirect URI in the app registration doesn't exactly match the Static Web App URL
+   - **"AADSTS7000215: Invalid client secret"**: The client secret expired or was copied incorrectly
+   - **Can't sign in**: Make sure your Azure AD account has access to the tenant
+
+### 6. Deploy Application
 
 Once infrastructure is deployed and secrets are configured:
 
@@ -147,6 +241,34 @@ After successful Terraform deployment, check the workflow output or the generate
 - OpenAI API key is stored as a secret in Azure Container Apps
 - CORS is configured to only allow requests from the Static Web App domain
 - All sensitive values are properly marked as sensitive in Terraform
+- Optional Azure AD OAuth authentication via Static Web Apps built-in auth
+
+## Authentication
+
+The application supports optional Azure AD OAuth authentication:
+
+- **Frontend**: Uses Azure Static Web Apps built-in authentication
+- **Configuration**: Managed via `staticwebapp.config.json`
+- **User Experience**: Login/logout buttons with user info display
+- **API**: Passes authentication context via headers (optional, will work without auth)
+
+### OAuth Flow
+
+```
+User clicks "Login" 
+    ↓
+Redirect to Azure AD login page
+    ↓
+User authenticates with Azure AD
+    ↓
+Azure AD redirects back to app with token
+    ↓
+Static Web App validates token
+    ↓
+User is logged in (name displayed in UI)
+```
+
+**Note**: Authentication is entirely optional. If you don't configure OAuth, the app will work normally without requiring login.
 
 ## Contributing
 

@@ -1,6 +1,8 @@
 :root{--bg:#0f172a;--panel:#111827;--text:#e5e7eb;--muted:#9ca3af;--accent:#38bdf8}
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto}
-header{padding:16px 20px;border-bottom:1px solid #1f2937} header h1{margin:0;font-size:18px}
+header{padding:16px 20px;border-bottom:1px solid #1f2937;display:flex;justify-content:space-between;align-items:center} header h1{margin:0;font-size:18px}
+.auth-section{display:flex;align-items:center;gap:10px} .auth-btn{font-size:14px}
+#user-info{color:var(--muted);font-size:14px}
 main{max-width:900px;margin:0 auto;padding:16px}
 #chat{height:60vh;overflow:auto;padding:12px;background:var(--panel);border:1px solid #1f2937;border-radius:12px}
 .msg{display:flex;margin:10px 0}.bubble{padding:10px 12px;border-radius:10px;max-width:75%;white-space:pre-wrap}
