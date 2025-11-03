@@ -32,10 +32,6 @@ resource "azurerm_static_web_app" "swa" {
   location            = "East US 2"
   sku_tier            = "Free"
   tags                = local.tags
-
-  identity {
-    type = "SystemAssigned"
-  }
 }
 
 resource "azurerm_log_analytics_workspace" "env" {
