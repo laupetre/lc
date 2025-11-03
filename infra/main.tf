@@ -165,8 +165,6 @@ resource "azuread_application" "swa_oauth" {
   }
 
   owners = [data.azurerm_client_config.current.object_id]
-  
-  tags = local.tags
 }
 
 # Create a password credential (client secret) for the app
