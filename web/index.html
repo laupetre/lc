@@ -12,7 +12,6 @@
         <p class="subtitle">Powered by OpenAI and LangChain</p>
         <div class="auth-section">
             <span id="user-info"></span>
-            <button id="login-btn" class="auth-btn">Login</button>
             <button id="logout-btn" class="auth-btn" style="display: none;">Logout</button>
         </div>
     </header>
@@ -37,7 +36,6 @@
         const input = document.getElementById('input');
         const send = document.getElementById('send');
         const statusEl = document.getElementById('status');
-        const loginBtn = document.getElementById('login-btn');
         const logoutBtn = document.getElementById('logout-btn');
         const userInfo = document.getElementById('user-info');
         
@@ -50,7 +48,6 @@
                     if (data.clientPrincipal) {
                         // User is authenticated
                         userInfo.textContent = `👤 ${data.clientPrincipal.userDetails}`;
-                        loginBtn.style.display = 'none';
                         logoutBtn.style.display = 'inline-block';
                         return true;
                     }
@@ -58,15 +55,10 @@
             } catch (error) {
                 console.log('Not authenticated');
             }
-            // User is not authenticated
-            loginBtn.style.display = 'inline-block';
-            logoutBtn.style.display = 'none';
+            // User is not authenticated - automatically redirect to login
+            window.location.href = '/login';
             return false;
         }
-        
-        loginBtn.addEventListener('click', () => {
-            window.location.href = '/login';
-        });
         
         logoutBtn.addEventListener('click', () => {
             window.location.href = '/logout';
