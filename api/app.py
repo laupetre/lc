@@ -4,8 +4,6 @@ from typing import Optional, List
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from boxsdk import OAuth2, Client
-
 
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -25,19 +23,24 @@ SYSTEM = "You are a concise, helpful assistant."
 prompt = ChatPromptTemplate.from_messages([("system", SYSTEM), ("human", "{input}")])
 chain = prompt | llm | (lambda msg: msg.content)
 
-# Initialize Box client
+# Initialize Box client (optional)
 BOX_CLIENT_ID = os.getenv("BOX_CLIENT_ID")
 BOX_CLIENT_SECRET = os.getenv("BOX_CLIENT_SECRET")
 BOX_ACCESS_TOKEN = os.getenv("BOX_ACCESS_TOKEN")
 
 box_client = None
 if BOX_CLIENT_ID and BOX_CLIENT_SECRET and BOX_ACCESS_TOKEN:
-    oauth2 = OAuth2(
-        client_id=BOX_CLIENT_ID,
-        client_secret=BOX_CLIENT_SECRET,
-        access_token=BOX_ACCESS_TOKEN
-    )
-    box_client = Client(oauth2)
+    try:
+        from boxsdk import OAuth2, Client
+        oauth2 = OAuth2(
+            client_id=BOX_CLIENT_ID,
+            client_secret=BOX_CLIENT_SECRET,
+            access_token=BOX_ACCESS_TOKEN
+        )
+        box_client = Client(oauth2)
+    except ImportError:
+        print("Warning: boxsdk not installed. Box integration disabled.")
+        box_client = None
 
 
 app = FastAPI(title="LangChain Chat API")

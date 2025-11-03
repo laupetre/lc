@@ -4,6 +4,9 @@ locals {
     env     = "prod"
     iac     = "terraform"
   }
+  
+  # Only create Box secrets if values are provided
+  has_box_config = var.box_client_id != "" && var.box_client_secret != "" && var.box_access_token != ""
 }
 
 resource "azurerm_resource_group" "rg" {
@@ -123,54 +126,65 @@ resource "azurerm_container_app" "api" {
     value = azurerm_container_registry.acr.admin_password
   }
 
-  # Box integration secrets (optional)
-  secret {
-    name  = "box-client-id"
-    value = var.box_client_id
+  # Box integration secrets (optional - only if configured)
+  dynamic "secret" {
+    for_each = local.has_box_config ? [1] : []
+    content {
+      name  = "box-client-id"
+      value = var.box_client_id
+    }
   }
-  secret {
-    name  = "box-client-secret"
-    value = var.box_client_secret
+  dynamic "secret" {
+    for_each = local.has_box_config ? [1] : []
+    content {
+      name  = "box-client-secret"
+      value = var.box_client_secret
+    }
   }
-  secret {
-    name  = "box-access-token"
-    value = var.box_access_token
+  dynamic "secret" {
+    for_each = local.has_box_config ? [1] : []
+    content {
+      name  = "box-access-token"
+      value = var.box_access_token
+    }
   }
 
   tags = local.tags
 }
 
 # Azure AD OAuth app registration for Static Web App authentication
-resource "azuread_application" "swa_oauth" {
-  display_name     = "${var.project}-oauth-app"
-  sign_in_audience = "AzureADMyOrg"
-  
-  web {
-    redirect_uris = [
-      "https://${azurerm_static_web_app.swa.default_host_name}/.auth/login/aad/callback"
-    ]
-  }
-
-  required_resource_access {
-    resource_app_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
-    
-    resource_access {
-      id   = "e1fe6dd8-ba31-4d61-89e7-88639da4683d" # User.Read
-      type = "Scope"
-    }
-  }
-
-  owners = [data.azurerm_client_config.current.object_id]
-}
-
-# Create a password credential (client secret) for the app
-resource "azuread_application_password" "swa_oauth" {
-  application_id = azuread_application.swa_oauth.id
-  display_name   = "Static Web App OAuth Secret"
-  
-  # Set expiration to 1 year from now
-  end_date = timeadd(timestamp(), "8760h")
-}
+# Commented out due to insufficient permissions in GitHub Actions
+# Create app registration manually in Azure Portal if needed
+# resource "azuread_application" "swa_oauth" {
+#   display_name     = "${var.project}-oauth-app"
+#   sign_in_audience = "AzureADMyOrg"
+#   
+#   web {
+#     redirect_uris = [
+#       "https://${azurerm_static_web_app.swa.default_host_name}/.auth/login/aad/callback"
+#     ]
+#   }
+#
+#   required_resource_access {
+#     resource_app_id = "00000003-0000-0000-c000-000000000000" # Microsoft Graph
+#     
+#     resource_access {
+#       id   = "e1fe6dd8-ba31-4d61-89e7-88639da4683d" # User.Read
+#       type = "Scope"
+#     }
+#   }
+#
+#   owners = [data.azurerm_client_config.current.object_id]
+# }
+#
+# # Create a password credential (client secret) for the app
+# resource "azuread_application_password" "swa_oauth" {
+#   application_id = azuread_application.swa_oauth.id
+#   display_name   = "Static Web App OAuth Secret"
+#   
+#   # Set expiration to 1 year from now
+#   end_date = timeadd(timestamp(), "8760h")
+# }
 
 # Azure AD resources for GitHub Actions OIDC (commented out due to permission issues)
 # resource "azuread_application" "gha" {
