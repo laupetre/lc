@@ -1,3 +1,12 @@
+variable "environment" {
+  type        = string
+  description = "Environment name (preprod or prod)"
+  validation {
+    condition     = contains(["preprod", "prod"], var.environment)
+    error_message = "Environment must be either 'preprod' or 'prod'."
+  }
+}
+
 variable "project" {
   type    = string
   default = "lc-swa"

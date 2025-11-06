@@ -1,0 +1,9 @@
+{
+  "resource_group": "lc-swa-prod-rg",
+  "location": "eastus2",
+  "acr_name": "lcacrioprod",
+  "containerapps_env": "lc-swa-prod-env",
+  "aca_name": "lc-swa-prod-api",
+  "swa_name": "lc-swa-prod-frontend"
+}
+

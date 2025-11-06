@@ -1,16 +1,25 @@
 locals {
   tags = {
-    project = var.project
-    env     = "prod"
-    iac     = "terraform"
+    project     = var.project
+    env         = var.environment
+    iac         = "terraform"
   }
   
   # Only create Box secrets if values are provided
   has_box_config = var.box_client_id != "" && var.box_client_secret != "" && var.box_access_token != ""
+  
+  # Environment-aware resource names
+  resource_group_name      = "${var.project}-${var.environment}-rg"
+  acr_name                 = "${var.acr_name}${var.environment}"
+  containerapp_env_name    = "${var.project}-${var.environment}-env"
+  containerapp_name        = "${var.project}-${var.environment}-api"
+  swa_name                 = "${var.project}-${var.environment}-frontend"
+  log_analytics_name       = "${var.project}-${var.environment}-env-logs"
+  managed_identity_name    = "${var.project}-${var.environment}-api-mi"
 }
 
 resource "azurerm_resource_group" "rg" {
-  name     = var.resource_group_name
+  name     = local.resource_group_name
   location = var.location
   tags     = local.tags
 
@@ -20,7 +29,7 @@ resource "azurerm_resource_group" "rg" {
 }
 
 resource "azurerm_container_registry" "acr" {
-  name                = var.acr_name
+  name                = local.acr_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   sku                 = "Basic"
@@ -30,7 +39,7 @@ resource "azurerm_container_registry" "acr" {
 }
 
 resource "azurerm_static_web_app" "swa" {
-  name                = var.swa_name
+  name                = local.swa_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = "East US 2"
   sku_tier            = "Free"
@@ -38,7 +47,7 @@ resource "azurerm_static_web_app" "swa" {
 }
 
 resource "azurerm_log_analytics_workspace" "env" {
-  name                = "${var.containerapp_env_name}-logs"
+  name                = local.log_analytics_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   sku                 = "PerGB2018"
@@ -47,7 +56,7 @@ resource "azurerm_log_analytics_workspace" "env" {
 }
 
 resource "azurerm_container_app_environment" "env" {
-  name                       = var.containerapp_env_name
+  name                       = local.containerapp_env_name
   resource_group_name        = azurerm_resource_group.rg.name
   location                   = azurerm_resource_group.rg.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.env.id
@@ -55,14 +64,14 @@ resource "azurerm_container_app_environment" "env" {
 }
 
 resource "azurerm_user_assigned_identity" "api" {
-  name                = "${var.containerapp_name}-mi"
+  name                = local.managed_identity_name
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
   tags                = local.tags
 }
 
 resource "azurerm_container_app" "api" {
-  name                         = var.containerapp_name
+  name                         = local.containerapp_name
   resource_group_name          = azurerm_resource_group.rg.name
   container_app_environment_id = azurerm_container_app_environment.env.id
   revision_mode                = "Single"

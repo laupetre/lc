@@ -1,4 +1,8 @@
-# Example terraform.tfvars - copy to terraform.tfvars and fill in sensitive values
+# Example terraform.tfvars - copy to terraform.tfvars.{environment} and fill in sensitive values
+# Use terraform.tfvars.preprod or terraform.tfvars.prod for environment-specific configurations
+
+# Required: Environment name (preprod or prod)
+environment = "preprod"
 
 # Required: Your OpenAI API key
 openai_api_key = "your-openai-key"
@@ -9,11 +13,13 @@ github_repo   = "your-github-repo"
 github_branch = "main"
 
 # Optional: Override default values
-project               = "lc-swa"
-location              = "eastus"
-resource_group_name   = "lc-swa-rg"
-acr_name              = "lcacrio"
-openai_model          = "gpt-4o-mini"
-containerapp_env_name = "lc-swa-env"
-containerapp_name     = "lc-swa-api"
-swa_name              = "lc-swa-frontend"
+project      = "lc-swa"
+location     = "eastus2"
+acr_name     = "lcacrio"
+openai_model = "gpt-4o-mini"
+
+# Note: Resource names are automatically generated with environment suffix:
+# - resource_group_name: {project}-{environment}-rg
+# - containerapp_env_name: {project}-{environment}-env
+# - containerapp_name: {project}-{environment}-api
+# - swa_name: {project}-{environment}-frontend

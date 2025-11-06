@@ -4,6 +4,14 @@ name: Terraform Infra
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (preprod or prod)'
+        required: true
+        type: choice
+        options:
+          - preprod
+          - prod
   push:
     branches: [ main ]
 
@@ -21,6 +29,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs.environment }}"
+          else
+            # Default to prod for push events
+            ENV="prod"
+          fi
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_OUTPUT
+          echo "Using environment: $ENV"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
@@ -32,9 +52,14 @@ jobs:
       - name: Read deploy.json (from repo root)
         id: cfg
         run: |
-          # workflow defaults set working-directory: infra, so deploy.json lives at ../deploy.json
-          RG=$(jq -r .resource_group ../deploy.json)
-          LOCATION=$(jq -r .location ../deploy.json)
+          # workflow defaults set working-directory: infra, so deploy.json lives at ../deploy.${{ steps.env.outputs.ENVIRONMENT }}.json
+          DEPLOY_FILE="../deploy.${{ steps.env.outputs.ENVIRONMENT }}.json"
+          if [ ! -f "$DEPLOY_FILE" ]; then
+            echo "Error: $DEPLOY_FILE not found"
+            exit 1
+          fi
+          RG=$(jq -r .resource_group "$DEPLOY_FILE")
+          LOCATION=$(jq -r .location "$DEPLOY_FILE")
           echo "RG=$RG" >> $GITHUB_OUTPUT
           echo "LOCATION=$LOCATION" >> $GITHUB_OUTPUT
 
@@ -49,6 +74,10 @@ jobs:
       - name: Initialize Terraform
         run: terraform init -input=false -no-color
 
+      - name: Select or create Terraform workspace
+        run: |
+          terraform workspace select ${{ steps.env.outputs.ENVIRONMENT }} || terraform workspace new ${{ steps.env.outputs.ENVIRONMENT }}
+
       - name: Import existing resources (if exists)
         continue-on-error: true
         env:
@@ -57,16 +86,17 @@ jobs:
           ARM_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           ARM_USE_OIDC: "true"
         run: |
-          RG=$(jq -r .resource_group ../deploy.json)
-          LOCATION=$(jq -r .location ../deploy.json)
-          ACR=$(jq -r .acr_name ../deploy.json)
-          SWA=$(jq -r .swa_name ../deploy.json)
-          ENV=$(jq -r .containerapps_env ../deploy.json)
-          ACA=$(jq -r .aca_name ../deploy.json)
+          DEPLOY_FILE="../deploy.${{ steps.env.outputs.ENVIRONMENT }}.json"
+          RG=$(jq -r .resource_group "$DEPLOY_FILE")
+          LOCATION=$(jq -r .location "$DEPLOY_FILE")
+          ACR=$(jq -r .acr_name "$DEPLOY_FILE")
+          SWA=$(jq -r .swa_name "$DEPLOY_FILE")
+          ENV=$(jq -r .containerapps_env "$DEPLOY_FILE")
+          ACA=$(jq -r .aca_name "$DEPLOY_FILE")
           SUB_ID="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           
           # Common terraform import variables
-          TF_VARS="-var resource_group_name=$RG -var location=$LOCATION -var github_org=${{ github.repository_owner }} -var github_repo=${{ github.event.repository.name }} -var github_branch=${{ github.ref_name }} -var openai_api_key=${{ secrets.OPENAI_API_KEY }}"
+          TF_VARS="-var-file=terraform.tfvars.${{ steps.env.outputs.ENVIRONMENT }} -var github_org=${{ github.repository_owner }} -var github_repo=${{ github.event.repository.name }} -var github_branch=${{ github.ref_name }} -var openai_api_key=${{ secrets.OPENAI_API_KEY }}"
           
           # Import Resource Group
           if az group show -n "$RG" >/dev/null 2>&1; then
@@ -117,8 +147,7 @@ jobs:
           ARM_USE_OIDC: "true"
         run: |
           terraform plan -input=false -no-color -out=tfplan \
-            -var "resource_group_name=${{ steps.cfg.outputs.RG }}" \
-            -var "location=${{ steps.cfg.outputs.LOCATION }}" \
+            -var-file="terraform.tfvars.${{ steps.env.outputs.ENVIRONMENT }}" \
             -var "github_org=${{ github.repository_owner }}" \
             -var "github_repo=${{ github.event.repository.name }}" \
             -var "github_branch=${{ github.ref_name }}" \

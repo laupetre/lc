@@ -1,0 +1,16 @@
+# Preprod environment configuration
+
+environment = "preprod"
+
+# Optional: Override default values if needed
+project               = "lc-swa"
+location              = "eastus2"
+acr_name              = "lcacrio"
+openai_model          = "gpt-4o-mini"
+
+# Note: These are provided by GitHub Actions:
+# - openai_api_key (from secrets)
+# - github_org (from github.repository_owner)
+# - github_repo (from github.event.repository.name)
+# - github_branch (from github.ref_name)
+

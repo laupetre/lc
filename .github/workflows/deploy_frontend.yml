@@ -4,6 +4,14 @@ name: Deploy Frontend (Azure Static Web Apps)
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (preprod or prod)'
+        required: true
+        type: choice
+        options:
+          - preprod
+          - prod
   workflow_run:
     workflows: [ "Deploy API (Azure Container Apps)" ]
     types:
@@ -21,16 +29,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Determine environment
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs.environment }}"
+          else
+            # Default to prod for workflow_run events
+            ENV="prod"
+          fi
+          echo "ENVIRONMENT=$ENV" >> $GITHUB_OUTPUT
+          echo "Using environment: $ENV"
+
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
       - name: Read deploy.json
         id: cfg
         run: |
-          RG=$(jq -r .resource_group deploy.json)
-          ENV=$(jq -r .containerapps_env deploy.json)
-          ACA=$(jq -r .aca_name deploy.json)
-          SWA=$(jq -r .swa_name deploy.json)
+          DEPLOY_FILE="deploy.${{ steps.env.outputs.ENVIRONMENT }}.json"
+          if [ ! -f "$DEPLOY_FILE" ]; then
+            echo "Error: $DEPLOY_FILE not found"
+            exit 1
+          fi
+          RG=$(jq -r .resource_group "$DEPLOY_FILE")
+          ENV=$(jq -r .containerapps_env "$DEPLOY_FILE")
+          ACA=$(jq -r .aca_name "$DEPLOY_FILE")
+          SWA=$(jq -r .swa_name "$DEPLOY_FILE")
           echo "RG=$RG"   >> $GITHUB_OUTPUT
           echo "ENV=$ENV" >> $GITHUB_OUTPUT
           echo "ACA=$ACA" >> $GITHUB_OUTPUT

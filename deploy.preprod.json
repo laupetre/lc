@@ -1,0 +1,9 @@
+{
+  "resource_group": "lc-swa-preprod-rg",
+  "location": "eastus2",
+  "acr_name": "lcacriopreprod",
+  "containerapps_env": "lc-swa-preprod-env",
+  "aca_name": "lc-swa-preprod-api",
+  "swa_name": "lc-swa-preprod-frontend"
+}
+

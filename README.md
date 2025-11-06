@@ -21,17 +21,26 @@ A full-stack chat application built with LangChain, FastAPI, and Azure services,
 
 ### 1. Configure Terraform Variables
 
-Copy the example variables file and update it with your values:
+The project supports multiple environments (preprod and prod). Environment-specific configuration files are provided:
 
-```bash
-cp infra/terraform.tfvars.example infra/terraform.tfvars
-```
+- `infra/terraform.tfvars.preprod` - Preprod environment configuration
+- `infra/terraform.tfvars.prod` - Prod environment configuration
+- `deploy.preprod.json` - Preprod deployment configuration
+- `deploy.prod.json` - Prod deployment configuration
 
-Edit `infra/terraform.tfvars` and set:
-- `openai_api_key`: Your OpenAI API key
-- `github_org`: Your GitHub username or organization
-- `github_repo`: Your repository name
-- `github_branch`: Branch name (usually "main")
+Edit the environment-specific tfvars files and set:
+- `environment`: Must be "preprod" or "prod" (already set in the files)
+- `openai_api_key`: Your OpenAI API key (provided via GitHub Actions secrets)
+- `github_org`: Your GitHub username or organization (provided automatically)
+- `github_repo`: Your repository name (provided automatically)
+- `github_branch`: Branch name (provided automatically, defaults to "main")
+
+**Note**: Resource names are automatically generated with environment suffixes:
+- Resource groups: `{project}-{environment}-rg`
+- Container Registry: `{acr_name}{environment}`
+- Container App Environment: `{project}-{environment}-env`
+- Container App: `{project}-{environment}-api`
+- Static Web App: `{project}-{environment}-frontend`
 
 ### 2. Set GitHub Repository Secrets
 
@@ -51,16 +60,34 @@ In your GitHub repository, go to Settings → Secrets and variables → Actions,
 
 ### 3. Deploy Infrastructure
 
-1. **First-time setup**: Run the Terraform workflow manually:
+#### Deploying to an Environment
+
+The infrastructure supports separate preprod and prod environments with isolated resources and Terraform state.
+
+1. **Deploy Infrastructure**:
    - Go to Actions tab in GitHub
    - Select "Terraform Infra" workflow
    - Click "Run workflow"
+   - **Select the environment** (preprod or prod) from the dropdown
+   - Click "Run workflow" button
 
-2. **Get deployment information**: After Terraform completes, check the workflow output for:
+2. **Environment Isolation**:
+   - Each environment uses a separate Terraform workspace for state isolation
+   - Resources are automatically named with environment suffixes
+   - Preprod and prod resources are completely isolated
+
+3. **Get deployment information**: After Terraform completes, check the workflow output for:
    - Azure Client ID (needed for `AZURE_CLIENT_ID` secret)
    - Static Web App deployment token (needed for `SWA_DEPLOYMENT_TOKEN` secret)
 
-3. **Update secrets**: Add the missing secrets from step 2
+4. **Update secrets**: Add the missing secrets from step 3
+
+#### Environment-Specific Configuration
+
+- **Preprod**: Use for testing and staging before production
+- **Prod**: Use for production workloads
+- Each environment requires its own set of secrets (if different)
+- Resource names are automatically prefixed/suffixed with the environment name
 
 ### 4. Configure OAuth Authentication (Optional)
 
@@ -158,26 +185,40 @@ If authentication doesn't work:
 
 Once infrastructure is deployed and secrets are configured:
 
-1. **API Deployment**: Push changes to the `api/` directory or run the "Deploy API" workflow manually
-2. **Frontend Deployment**: Push changes to the `web/` directory or run the "Deploy Frontend" workflow manually
+1. **API Deployment**: 
+   - Push changes to the `api/` directory (automatically deploys to prod)
+   - Or run the "Deploy API" workflow manually and select the environment (preprod or prod)
+
+2. **Frontend Deployment**: 
+   - Push changes to the `web/` directory (automatically deploys to prod)
+   - Or run the "Deploy Frontend" workflow manually and select the environment (preprod or prod)
+
+**Note**: When workflows are triggered by push events, they default to the `prod` environment. Use manual workflow dispatch to deploy to `preprod`.
 
 ## Workflow Details
 
 ### Terraform Infrastructure (`terraform_infra.yml`)
 - Deploys Azure resources (Resource Group, Container Registry, Container Apps, Static Web App)
+- Supports environment selection (preprod or prod) via workflow input
+- Uses Terraform workspaces for state isolation between environments
 - Sets up GitHub Actions OIDC authentication
 - Creates federated identity credentials for secure Azure access
+- Defaults to `prod` environment for push events
 
 ### API Deployment (`deploy_api.yml`)
 - Builds Docker image from `api/Dockerfile`
-- Pushes image to Azure Container Registry
-- Updates Container App with new image
+- Pushes image to Azure Container Registry (environment-specific)
+- Updates Container App with new image (environment-specific)
 - Configures environment variables and secrets
+- Supports environment selection via workflow input
+- Defaults to `prod` environment for push events
 
 ### Frontend Deployment (`deploy_frontend.yml`)
-- Generates `config.js` with API endpoint
-- Deploys static files to Azure Static Web Apps
+- Generates `config.js` with API endpoint (environment-specific)
+- Deploys static files to Azure Static Web Apps (environment-specific)
 - Configures CORS settings
+- Supports environment selection via workflow input
+- Defaults to `prod` environment for workflow_run events
 
 ## Project Structure
 
@@ -194,12 +235,15 @@ Once infrastructure is deployed and secrets are configured:
 │   ├── main.tf           # Resource definitions
 │   ├── variables.tf      # Variable definitions
 │   ├── outputs.tf       # Output values
-│   └── terraform.tfvars.example # Example variables
+│   ├── terraform.tfvars.example # Example variables
+│   ├── terraform.tfvars.preprod # Preprod environment config
+│   └── terraform.tfvars.prod    # Prod environment config
 ├── .github/workflows/    # GitHub Actions
 │   ├── terraform_infra.yml    # Infrastructure deployment
 │   ├── deploy_api.yml         # API deployment
 │   └── deploy_frontend.yml    # Frontend deployment
-└── deploy.json           # Deployment configuration
+├── deploy.preprod.json   # Preprod deployment configuration
+└── deploy.prod.json      # Prod deployment configuration
 ```
 
 ## Local Development
@@ -223,10 +267,21 @@ python -m http.server 8001
 
 ### Common Issues
 
-1. **Terraform fails**: Check that all required variables are set in `terraform.tfvars`
-2. **API deployment fails**: Ensure Azure Container Registry exists and GitHub Actions has proper permissions
-3. **Frontend deployment fails**: Verify Static Web App deployment token is correct
-4. **CORS errors**: Check that `ALLOWED_ORIGIN` environment variable matches your Static Web App URL
+1. **Terraform fails**: 
+   - Check that all required variables are set in the environment-specific `terraform.tfvars.{environment}` file
+   - Verify the `environment` variable is set to "preprod" or "prod"
+   - Ensure the corresponding `deploy.{environment}.json` file exists
+2. **API deployment fails**: 
+   - Ensure Azure Container Registry exists for the selected environment
+   - Verify GitHub Actions has proper permissions
+   - Check that the correct environment-specific deploy.json file is being used
+3. **Frontend deployment fails**: 
+   - Verify Static Web App deployment token is correct
+   - Ensure the Static Web App exists for the selected environment
+4. **CORS errors**: Check that `ALLOWED_ORIGIN` environment variable matches your Static Web App URL for the correct environment
+5. **Wrong environment deployed**: 
+   - Verify you selected the correct environment in the workflow dispatch
+   - Check that the workflow is using the correct deploy.json file (deploy.{environment}.json)
 
 ### Getting Deployment Information
 
