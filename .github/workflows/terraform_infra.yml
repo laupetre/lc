@@ -13,7 +13,9 @@ on:
           - preprod
           - prod
   push:
-    branches: [ main ]
+    branches: 
+      - main
+      - preprod
 
 permissions:
   id-token: write
@@ -34,12 +36,15 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             ENV="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.ref_name }}" == "preprod" ]; then
+            # Deploy to preprod when pushing to preprod branch
+            ENV="preprod"
           else
-            # Default to prod for push events
+            # Default to prod for main branch and other pushes
             ENV="prod"
           fi
           echo "ENVIRONMENT=$ENV" >> $GITHUB_OUTPUT
-          echo "Using environment: $ENV"
+          echo "Using environment: $ENV (branch: ${{ github.ref_name }})"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2

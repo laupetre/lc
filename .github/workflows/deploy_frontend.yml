@@ -3,6 +3,12 @@
 name: Deploy Frontend (Azure Static Web Apps)
 
 on:
+  push:
+    branches:
+      - main
+      - preprod
+    paths:
+      - "web/**"
   workflow_dispatch:
     inputs:
       environment:
@@ -24,7 +30,7 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || github.event_name == 'workflow_dispatch' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,12 +40,22 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             ENV="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref_name }}" == "preprod" ]; then
+            # Deploy to preprod when pushing to preprod branch
+            ENV="preprod"
+          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
+            # For workflow_run events, check the head branch of the triggering workflow
+            if [ "${{ github.event.workflow_run.head_branch }}" == "preprod" ]; then
+              ENV="preprod"
+            else
+              ENV="prod"
+            fi
           else
-            # Default to prod for workflow_run events
+            # Default to prod for main branch and other events
             ENV="prod"
           fi
           echo "ENVIRONMENT=$ENV" >> $GITHUB_OUTPUT
-          echo "Using environment: $ENV"
+          echo "Using environment: $ENV (event: ${{ github.event_name }}, branch: ${{ github.ref_name }})"
 
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq

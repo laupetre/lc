@@ -185,40 +185,55 @@ If authentication doesn't work:
 
 Once infrastructure is deployed and secrets are configured:
 
+#### Branch-Based Deployment (Recommended)
+
+The workflows automatically detect the environment based on the branch:
+
+- **Push to `main` branch** → Deploys to **prod** environment
+- **Push to `preprod` branch** → Deploys to **preprod** environment
+
 1. **API Deployment**: 
-   - Push changes to the `api/` directory (automatically deploys to prod)
-   - Or run the "Deploy API" workflow manually and select the environment (preprod or prod)
+   - Push changes to the `api/` directory on `main` branch → deploys to prod
+   - Push changes to the `api/` directory on `preprod` branch → deploys to preprod
+   - Or run the "Deploy API" workflow manually and select the environment
 
 2. **Frontend Deployment**: 
-   - Push changes to the `web/` directory (automatically deploys to prod)
-   - Or run the "Deploy Frontend" workflow manually and select the environment (preprod or prod)
+   - Push changes to the `web/` directory on `main` branch → deploys to prod
+   - Push changes to the `web/` directory on `preprod` branch → deploys to preprod
+   - Or run the "Deploy Frontend" workflow manually and select the environment
 
-**Note**: When workflows are triggered by push events, they default to the `prod` environment. Use manual workflow dispatch to deploy to `preprod`.
+#### Manual Deployment
+
+You can also manually trigger workflows:
+- Go to Actions tab → Select workflow → "Run workflow" → Choose environment
+
+**Note**: To deploy to preprod automatically, create and push to a `preprod` branch. The workflows will automatically detect the branch and deploy to the correct environment.
 
 ## Workflow Details
 
 ### Terraform Infrastructure (`terraform_infra.yml`)
 - Deploys Azure resources (Resource Group, Container Registry, Container Apps, Static Web App)
-- Supports environment selection (preprod or prod) via workflow input
+- Supports environment selection (preprod or prod) via workflow input or branch detection
 - Uses Terraform workspaces for state isolation between environments
 - Sets up GitHub Actions OIDC authentication
 - Creates federated identity credentials for secure Azure access
-- Defaults to `prod` environment for push events
+- Branch-based deployment: `main` → prod, `preprod` → preprod
 
 ### API Deployment (`deploy_api.yml`)
 - Builds Docker image from `api/Dockerfile`
 - Pushes image to Azure Container Registry (environment-specific)
 - Updates Container App with new image (environment-specific)
 - Configures environment variables and secrets
-- Supports environment selection via workflow input
-- Defaults to `prod` environment for push events
+- Supports environment selection via workflow input or branch detection
+- Branch-based deployment: `main` → prod, `preprod` → preprod
 
 ### Frontend Deployment (`deploy_frontend.yml`)
 - Generates `config.js` with API endpoint (environment-specific)
 - Deploys static files to Azure Static Web Apps (environment-specific)
 - Configures CORS settings
-- Supports environment selection via workflow input
-- Defaults to `prod` environment for workflow_run events
+- Supports environment selection via workflow input or branch detection
+- Branch-based deployment: `main` → prod, `preprod` → preprod
+- Automatically detects environment when triggered by API deployment workflow
 
 ## Project Structure
 
